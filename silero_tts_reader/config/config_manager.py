@@ -46,6 +46,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "transliteration": {
         "enabled": True,
+        "ignore_urls": True,
         "use_llm": False,
         "provider": "ollama",          # "ollama", "openai", "custom"
         "base_url": "http://localhost:11434/v1",
@@ -196,6 +197,14 @@ class ConfigManager:
     @transliteration_enabled.setter
     def transliteration_enabled(self, v: bool) -> None:
         self.set("transliteration", "enabled", bool(v))
+
+    @property
+    def ignore_urls(self) -> bool:
+        return bool(self.get("transliteration", "ignore_urls", default=True))
+
+    @ignore_urls.setter
+    def ignore_urls(self, v: bool) -> None:
+        self.set("transliteration", "ignore_urls", bool(v))
 
     @property
     def transliteration_use_llm(self) -> bool:

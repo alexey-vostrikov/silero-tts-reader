@@ -341,6 +341,7 @@ class PlaybackWidget(QWidget):
             self._fade_anim.stop()
             self._fade_anim = None
         self._opacity_effect.setOpacity(1.0)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
         self.show()
         self.raise_()
 

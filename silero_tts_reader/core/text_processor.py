@@ -315,12 +315,35 @@ class TextProcessor:
         except Exception as exc:
             return False, f"Ошибка подключения: {exc}"
 
+    URL_PATTERN = re.compile(
+        r"(?:https?://|ftps?://|www\.)[^\s<>'\"\)]+|[a-zA-Z0-9.\-]+\.(?:com|org|net|ru|io|dev|ai|app|gov|edu|me|info|site|online|tech|xyz|co|by|ua|kz)[^\s<>'\"\)]*",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def strip_urls(cls, text: str) -> str:
+        """Remove URLs and web links from text."""
+        if not text:
+            return text
+        cleaned = cls.URL_PATTERN.sub("", text)
+        cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip()
+        return cleaned
+
     @classmethod
     def process_text(cls, text: str, config: ConfigManager) -> str:
         """Main text processing entry point."""
         print(f"[TextProcessor] Входной текст: {text!r}", flush=True)
         if not text:
             return text
+
+        # 0. Strip URLs if enabled in config
+        if getattr(config, "ignore_urls", True):
+            stripped = cls.strip_urls(text)
+            if stripped != text:
+                print(f"[TextProcessor] Удалены ссылки из текста: {stripped!r}", flush=True)
+                text = stripped
+                if not text:
+                    return ""
 
         # 1. 100% Standalone offline number transliteration first
         text_num_converted = cls.convert_numbers_to_words(text)

@@ -652,6 +652,10 @@ class SettingsWindow(QDialog):
         trans_form = QFormLayout(trans_group)
         trans_form.setSpacing(8)
 
+        self._chk_ignore_urls = QCheckBox("Игнорировать ссылки (http/https/www)")
+        self._chk_ignore_urls.setChecked(self._config.ignore_urls)
+        trans_form.addRow(self._chk_ignore_urls)
+
         self._chk_transliterate = QCheckBox("Переписывать латинские/иностранные слова кириллицей")
         self._chk_transliterate.setChecked(self._config.transliteration_enabled)
         trans_form.addRow(self._chk_transliterate)
@@ -776,6 +780,8 @@ class SettingsWindow(QDialog):
             self._config.hotkey_stop = self._hk_stop.get_hotkey()
 
         # Save AI / Transliteration settings
+        if hasattr(self, "_chk_ignore_urls"):
+            self._config.ignore_urls = self._chk_ignore_urls.isChecked()
         if hasattr(self, "_chk_transliterate") and hasattr(self, "_chk_use_llm"):
             use_llm = self._chk_use_llm.isChecked()
             trans_enabled = self._chk_transliterate.isChecked() or use_llm
