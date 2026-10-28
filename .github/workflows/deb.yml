@@ -36,14 +36,15 @@ jobs:
       - name: Prepare git
         run: |
           set -euo pipefail
-          # В job с container шаги идут от root, а рабочая копия принадлежит другому
-          # uid: без safe.directory git молча отказывается работать, и версия пакета
-          # теряет суффикс с коммитом.
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          echo "pwd:              $(pwd)"
+          echo "GITHUB_WORKSPACE: $GITHUB_WORKSPACE"
+          ls -a "$GITHUB_WORKSPACE" | head -15
+          ls -d "$GITHUB_WORKSPACE/.git" 2>&1 || true
           git --version
-          echo "HEAD:    $(git rev-parse --short HEAD)"
-          echo "describe: $(git describe --tags --always 2>&1 || true)"
-          echo "dirty:   $(git status --porcelain | head -3 || true)"
+          # В job с container шаги идут от root, а рабочая копия принадлежит другому
+          # uid: без safe.directory git отказывается работать.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" rev-parse --short HEAD 2>&1 || true
 
       - name: Headless GTK tests
         run: |
