@@ -1,18 +1,44 @@
-"""System tray icon with context menu."""
+"""Иконка в трее и контекстное меню (GTK3).
+
+Порядок выбора бэкенда:
+1. ``AyatanaAppIndicator3`` — штатный путь для GNOME/Wayland (нужен пакет
+   ``gir1.2-ayatanaappindicator3-0.1`` и расширение AppIndicator в GNOME Shell);
+2. ``Gtk.StatusIcon`` — работает только в X11/XWayland, зато без лишних пакетов;
+3. ничего — приложение продолжает работать, а сообщения идут через
+   ``Gio.Notification`` (``TrayIcon.available == False``).
+"""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Callable
 
-from PyQt6.QtGui import QIcon
-from PyQt6.QtWidgets import QSystemTrayIcon, QMenu
+import gi
 
+gi.require_version("Gtk", "3.0")
+
+from gi.repository import Gtk  # noqa: E402
 
 _ASSETS_DIR = Path(__file__).parent.parent / "assets"
+_ICON_NAME = "audio-headset"
+
+_AppIndicator = None
+for _namespace in ("AyatanaAppIndicator3", "AppIndicator3"):
+    try:
+        gi.require_version(_namespace, "0.1")
+        _AppIndicator = __import__("gi.repository", fromlist=[_namespace]).__dict__[_namespace]
+        break
+    except Exception:
+        _AppIndicator = None
 
 
-class TrayIcon(QSystemTrayIcon):
-    """Application system tray icon and context menu."""
+def icon_path() -> str:
+    path = _ASSETS_DIR / "icon.png"
+    return str(path) if path.exists() else ""
+
+
+class TrayIcon:
+    """Иконка в трее с меню: озвучить буфер, настройки, о программе, выход."""
 
     def __init__(
         self,
@@ -20,59 +46,98 @@ class TrayIcon(QSystemTrayIcon):
         on_settings: Callable[[], None],
         on_about: Callable[[], None],
         on_quit: Callable[[], None],
-        parent=None,
     ) -> None:
-        icon_path = _ASSETS_DIR / "icon.png"
-        icon = QIcon(str(icon_path)) if icon_path.exists() else QIcon.fromTheme("audio-headset")
-        super().__init__(icon, parent)
-
         self._on_speak_clipboard = on_speak_clipboard
         self._on_settings = on_settings
         self._on_about = on_about
         self._on_quit = on_quit
 
-        self._build_menu()
-        self.setToolTip("Silero TTS Reader")
+        self._indicator = None
+        self._status_icon: Gtk.StatusIcon | None = None
+        self.available = False
 
-    def _build_menu(self) -> None:
-        menu = QMenu()
-        menu.setStyleSheet("""
-            QMenu {
-                background: #1e293b;
-                color: #e2e8f0;
-                border: 1px solid rgba(255,255,255,0.1);
-                border-radius: 8px;
-                padding: 4px;
-                font-size: 13px;
-            }
-            QMenu::item {
-                padding: 6px 20px;
-                border-radius: 4px;
-            }
-            QMenu::item:selected {
-                background: rgba(99, 102, 241, 0.6);
-            }
-            QMenu::separator {
-                height: 1px;
-                background: rgba(255,255,255,0.1);
-                margin: 4px 8px;
-            }
-        """)
+        self._menu = self._build_menu()
+        self._setup_backend()
 
-        act_clipboard = menu.addAction("📋  Озвучить буфер обмена")
-        act_clipboard.triggered.connect(self._on_speak_clipboard)
+    # ── Меню ─────────────────────────────────────────────────────────────────
 
-        menu.addSeparator()
+    def _build_menu(self) -> Gtk.Menu:
+        menu = Gtk.Menu()
 
-        act_settings = menu.addAction("⚙️  Настройки")
-        act_settings.triggered.connect(self._on_settings)
+        item = Gtk.MenuItem(label="📋  Озвучить буфер обмена")
+        item.connect("activate", lambda _i: self._on_speak_clipboard())
+        menu.append(item)
 
-        act_about = menu.addAction("ℹ️  О программе")
-        act_about.triggered.connect(self._on_about)
+        menu.append(Gtk.SeparatorMenuItem())
 
-        menu.addSeparator()
+        item = Gtk.MenuItem(label="⚙️  Настройки")
+        item.connect("activate", lambda _i: self._on_settings())
+        menu.append(item)
 
-        act_quit = menu.addAction("✖  Выход")
-        act_quit.triggered.connect(self._on_quit)
+        item = Gtk.MenuItem(label="ℹ️  О программе")
+        item.connect("activate", lambda _i: self._on_about())
+        menu.append(item)
 
-        self.setContextMenu(menu)
+        menu.append(Gtk.SeparatorMenuItem())
+
+        item = Gtk.MenuItem(label="✖  Выход")
+        item.connect("activate", lambda _i: self._on_quit())
+        menu.append(item)
+
+        menu.show_all()
+        return menu
+
+    # ── Бэкенды ──────────────────────────────────────────────────────────────
+
+    def _setup_backend(self) -> None:
+        path = icon_path()
+
+        if _AppIndicator is not None and path:
+            try:
+                self._indicator = _AppIndicator.Indicator.new(
+                    "silero-tts-reader",
+                    path,
+                    _AppIndicator.IndicatorCategory.APPLICATION_STATUS,
+                )
+                self._indicator.set_status(_AppIndicator.IndicatorStatus.ACTIVE)
+                self._indicator.set_title("Silero TTS Reader")
+                self._indicator.set_menu(self._menu)
+                self.available = True
+                return
+            except Exception:
+                self._indicator = None
+
+        # Gtk.StatusIcon на Wayland не отображается — там нужен AppIndicator
+        is_wayland = bool(os.environ.get("WAYLAND_DISPLAY")) or (
+            os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+        )
+        if hasattr(Gtk, "StatusIcon") and not is_wayland:
+            try:
+                self._status_icon = Gtk.StatusIcon.new_from_file(path) if path else (
+                    Gtk.StatusIcon.new_from_icon_name(_ICON_NAME)
+                )
+                self._status_icon.set_tooltip_text("Silero TTS Reader")
+                self._status_icon.set_visible(True)
+                self._status_icon.connect("popup-menu", self._on_popup_menu)
+                self._status_icon.connect("activate", lambda _i: self._on_speak_clipboard())
+                self.available = True
+            except Exception:
+                self._status_icon = None
+
+    def _on_popup_menu(self, status_icon: Gtk.StatusIcon, button: int, time: int) -> None:
+        self._menu.popup(None, None, Gtk.StatusIcon.position_menu, status_icon, button, time)
+
+    # ── Внешний интерфейс ────────────────────────────────────────────────────
+
+    def show(self) -> None:
+        if self._indicator is not None:
+            self._indicator.set_status(_AppIndicator.IndicatorStatus.ACTIVE)
+        elif self._status_icon is not None:
+            self._status_icon.set_visible(True)
+        # Нет трея — приложение всё равно работает, см. notify()
+
+    def hide(self) -> None:
+        if self._indicator is not None:
+            self._indicator.set_status(_AppIndicator.IndicatorStatus.PASSIVE)
+        elif self._status_icon is not None:
+            self._status_icon.set_visible(False)

@@ -1,7 +1,7 @@
 # Silero TTS Reader 🎙️🔊
 
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
-[![GUI Framework](https://img.shields.io/badge/GUI-PyQt6-green.svg)](https://pypi.org/project/PyQt6/)
+[![GUI Framework](https://img.shields.io/badge/GUI-GTK3%20%2F%20PyGObject-green.svg)](https://pygobject.gnome.org/)
 [![TTS Engine](https://img.shields.io/badge/TTS-Silero_v5-orange.svg)](https://silero.ai/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux_(X11%2FWayland)-lightgrey.svg)](https://www.kernel.org/)
@@ -62,7 +62,7 @@
 - 🎚 **Регулировка скорости (0.5x–3.0x)**: Изменение скорости речи в реальном времени с сохранением естественного тона голоса (требуется `rubberband`).
 - 🎨 **Интеграция с оформлением системы**:
   - Автоматическое определение тёмной/светлой темы ОС.
-  - Автоопределение и динамическое применение системного акцентного цвета (KDE / GNOME / COSMIC Desktop / Qt palette).
+  - Автоопределение и динамическое применение системного акцентного цвета (GNOME accent-color / портал Freedesktop, запасной путь — gsettings).
 - 🐧 **Поддержка Wayland и X11**: Стабильная работа в Arch Linux, Ubuntu, Fedora, Debian и COSMIC Desktop.
 
 ---
@@ -223,7 +223,7 @@ silero-tts-reader/
 ├── silero_tts_reader/
 │   ├── config/              # Менеджер конфигурации JSON
 │   ├── core/                # Ядро: TTS Engine, Audio Player, LLM & Number Transliteration
-│   ├── ui/                  # PyQt6 UI: Трей, Плавающий виджет, Окно настроек
+│   ├── ui/                  # GTK3 UI: трей, плавающий виджет, окно настроек
 │   └── app.py               # Главный контроллер приложения
 ├── install.sh               # Скрипт автоустановки
 ├── run.py                   # Точка входа для запуска
