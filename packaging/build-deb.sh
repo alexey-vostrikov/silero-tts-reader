@@ -44,11 +44,18 @@ else
     EXACT_TAG="$(git describe --tags --exact-match 2>/dev/null || true)"
     LAST_TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
 
-    if [[ "$EXACT_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        DEB_VERSION="${EXACT_TAG#v}"
-    elif [[ "$LAST_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    # Тег вида 0.0.1-gtk → 0.0.1+gtk: «-» в версии Debian разделяет upstream и
+    # ревизию пакета, поэтому суффикс переносим через «+».
+    TAG_RE='^v?([0-9]+\.[0-9]+\.[0-9]+)(-([A-Za-z0-9._]+))?$'
+
+    if [[ "$EXACT_TAG" =~ $TAG_RE ]]; then
+        DEB_VERSION="${BASH_REMATCH[1]}"
+        [[ -n "${BASH_REMATCH[3]:-}" ]] && DEB_VERSION="${DEB_VERSION}+${BASH_REMATCH[3]}"
+    elif [[ "$LAST_TAG" =~ $TAG_RE ]]; then
         COUNT="$(git rev-list --count "${LAST_TAG}..HEAD" 2>/dev/null || echo 0)"
-        DEB_VERSION="${LAST_TAG#v}+${COUNT}.g${SHA:-unknown}"
+        DEB_VERSION="${BASH_REMATCH[1]}"
+        [[ -n "${BASH_REMATCH[3]:-}" ]] && DEB_VERSION="${DEB_VERSION}+${BASH_REMATCH[3]}"
+        DEB_VERSION="${DEB_VERSION}+${COUNT}.g${SHA:-unknown}"
     elif [[ -n "$SHA" ]]; then
         DEB_VERSION="${BASE_VERSION}+git${SHA}"
     else
