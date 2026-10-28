@@ -17,7 +17,7 @@ defaults:
 jobs:
   deb:
     name: build .deb
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     container: ubuntu:24.04
     outputs:
       version: ${{ steps.build.outputs.version }}
@@ -193,7 +193,7 @@ jobs:
     name: attach .deb to the release
     needs: deb
     if: startsWith(github.ref, 'refs/tags/')   # любой тег, не только v*
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Download artifact
         uses: actions/download-artifact@v8
