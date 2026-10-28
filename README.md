@@ -153,9 +153,10 @@ sudo dpkg -r silero-tts-reader
 `.desktop` в `/usr/share/applications`, иконки в теме `hicolor`, user-unit
 `/usr/lib/systemd/user/silero-tts-reader.service` (не включается автоматически).
 
-`Depends` пакета ограничены тем, что реально есть в архиве Ubuntu (`python3-gi`,
-`gir1.2-gtk-3.0`, `python3-numpy` и т. д.). `torch` и `sounddevice` в архиве Ubuntu отсутствуют —
-они в `Recommends`, а запускатор проверяет их наличие и подсказывает команду установки:
+`Depends` пакета — только то, что реально есть в архиве Ubuntu: `python3-gi`, `gir1.2-gtk-3.0`,
+`python3-numpy`, а также `gir1.2-ayatanaappindicator3-0.1` (иконка в трее на Wayland) и
+`rubberband-cli` (изменение скорости). `torch` и `sounddevice` в архиве Ubuntu отсутствуют — они в
+`Recommends`, а запускатор проверяет их наличие и подсказывает команду установки:
 
 ```bash
 sudo apt install python3-pip
