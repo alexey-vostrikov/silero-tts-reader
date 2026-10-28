@@ -85,8 +85,21 @@ def rgba(color: str, alpha: float) -> str:
 
 
 def _interface_settings() -> Gio.Settings | None:
+    """``Gio.Settings`` для схемы GNOME либо ``None``, если схемы в системе нет.
+
+    Важно: ``Gio.Settings.new()`` на отсутствующей схеме не бросает исключение, а
+    роняет процесс с ``GLib-GIO-ERROR **: Settings schema ... is not installed``
+    (это abort, try/except не спасает). Поэтому сначала смотрим схему в источнике,
+    и только потом создаём объект.
+    """
     try:
-        return Gio.Settings.new(_INTERFACE_SCHEMA)
+        source = Gio.SettingsSchemaSource.get_default()
+        if source is None:
+            return None
+        schema = source.lookup(_INTERFACE_SCHEMA, True)
+        if schema is None:
+            return None
+        return Gio.Settings.new_full(schema, None, None)
     except Exception:
         return None
 
