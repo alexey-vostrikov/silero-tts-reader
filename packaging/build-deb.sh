@@ -25,21 +25,38 @@ KEEP=0
 
 # ── Версия ────────────────────────────────────────────────────────────────────
 # Формат Debian: цифры и точки; «-» разделяет upstream и ревизию пакета,
-# поэтому суффикс git добавляем через «+», а «-» превращаем в «.».
+# поэтому суффикс git добавляем через «+».
+# Правила (детерминированные — локальная сборка и CI дают одно и то же):
+#   тег на HEAD            v2.1.0          → 2.1.0
+#   тег в истории          v2.1.0 + 7 коммитов → 2.1.0+7.gabc1234
+#   тегов нет вовсе                        → <version из pyproject>+gitabc1234
 if [[ -n "${VERSION:-}" ]]; then
     DEB_VERSION="$VERSION"
 else
-    GIT_DESC="$(git describe --tags --always 2>/dev/null || true)"
-    if [[ -z "$GIT_DESC" ]]; then
-        DEB_VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' pyproject.toml | head -1)"
-        DEB_VERSION="${DEB_VERSION:-2.0.0}"
-    elif [[ "$GIT_DESC" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        DEB_VERSION="${GIT_DESC#v}"
-    elif [[ "$GIT_DESC" =~ ^v?([0-9]+\.[0-9]+\.[0-9]+)-([0-9]+)-g([0-9a-f]+)(-dirty)?$ ]]; then
-        DEB_VERSION="${BASH_REMATCH[1]}+${BASH_REMATCH[2]}.g${BASH_REMATCH[3]}${BASH_REMATCH[4]:+.dirty}"
+    BASE_VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' pyproject.toml | head -1)"
+    BASE_VERSION="${BASE_VERSION:-2.0.0}"
+    SHA="$(git rev-parse --short HEAD 2>/dev/null || true)"
+    if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+        DIRTY=1
     else
-        BASE="$(sed -n 's/^version *= *"\(.*\)"/\1/p' pyproject.toml | head -1)"
-        DEB_VERSION="${BASE:-2.0.0}+git${GIT_DESC//-/.}"
+        DIRTY=""
+    fi
+    EXACT_TAG="$(git describe --tags --exact-match 2>/dev/null || true)"
+    LAST_TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+
+    if [[ "$EXACT_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        DEB_VERSION="${EXACT_TAG#v}"
+    elif [[ "$LAST_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        COUNT="$(git rev-list --count "${LAST_TAG}..HEAD" 2>/dev/null || echo 0)"
+        DEB_VERSION="${LAST_TAG#v}+${COUNT}.g${SHA:-unknown}"
+    elif [[ -n "$SHA" ]]; then
+        DEB_VERSION="${BASE_VERSION}+git${SHA}"
+    else
+        DEB_VERSION="$BASE_VERSION"   # сборка из архива без git
+    fi
+
+    if [[ -n "$DIRTY" && -n "$SHA" ]]; then
+        DEB_VERSION="${DEB_VERSION}.dirty"
     fi
 fi
 DEB_VERSION="${DEB_VERSION#v}"
