@@ -1,438 +1,513 @@
-"""Floating playback widget — always-on-top overlay in the bottom-right corner."""
+"""Плавающий виджет воспроизведения — поверх всех окон, в правом нижнем углу (GTK3).
+
+Переписано с Qt на PyGObject: вместо сигналов — обычные callbacks-атрибуты
+(``on_pause_resume``, ``on_stop``, ``on_speed_changed``, ``on_rewind``,
+``on_seek_fraction``), вместо ``paintEvent`` — обработчик ``draw`` на cairo,
+вместо ``QPropertyAnimation`` — пошаговый таймер GLib.
+"""
 from __future__ import annotations
 
-from PyQt6.QtCore import (
-    Qt, QPoint, QPropertyAnimation, QEasingCurve, QTimer, pyqtSignal, QRect,
-)
-from PyQt6.QtGui import QColor, QPainter, QPainterPath, QFont, QFontDatabase
-from PyQt6.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
-    QSlider, QProgressBar, QApplication, QGraphicsOpacityEffect,
-)
+from typing import Callable
+
+import gi
+
+gi.require_version("Gdk", "3.0")
+gi.require_version("Gtk", "3.0")
+
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 from ..core.audio_player import SPEED_AVAILABLE
 
-
-class ClickableProgressBar(QProgressBar):
-    """QProgressBar that emits position_clicked(fraction) on mouse click."""
-
-    position_clicked = pyqtSignal(float)
-
-    def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton and self.width() > 0:
-            fraction = max(0.0, min(1.0, event.pos().x() / self.width()))
-            self.position_clicked.emit(fraction)
-        super().mousePressEvent(event)
+WIDGET_WIDTH = 360
+WIDGET_HEIGHT = 95
+CORNER_RADIUS = 14
 
 
-class PlaybackWidget(QWidget):
-    """Translucent always-on-top playback control widget."""
+class ProgressBar(Gtk.DrawingArea):
+    """Полоса прогресса, которая по клику сообщает долю 0.0–1.0.
 
-    # Signals emitted by widget controls
-    pause_resume_clicked = pyqtSignal()
-    stop_clicked = pyqtSignal()
-    speed_changed = pyqtSignal(float)
-    rewind_clicked = pyqtSignal(float)          # relative seconds (+5.0 or -5.0)
-    seek_fraction_clicked = pyqtSignal(float)  # 0.0 to 1.0
+    Своя отрисовка вместо ``Gtk.ProgressBar``: у GTK3 нельзя покрасить «заполнение»
+    отдельным цветом без хаков с CSS-узлами, а здесь нужен акцент темы.
+    """
 
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self._dragging = False
-        self._drag_offset = QPoint()
-        self._is_paused = False
-        self._opacity_effect = QGraphicsOpacityEffect(self)
-        self._fade_anim: QPropertyAnimation | None = None
-        self._hide_timer = QTimer(self)
-        self._hide_timer.setSingleShot(True)
-        self._hide_timer.timeout.connect(self._fade_out)
+    def __init__(self, on_seek) -> None:
+        super().__init__()
+        self._fraction = 0.0
+        self._on_seek = on_seek
+        self._track = "rgba(255, 255, 255, 0.15)"
+        self._fill = "#6366f1"
+        self.set_size_request(-1, 6)
+        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        try:
+            cursor = Gdk.Cursor.new_from_name(self.get_display(), "pointer")
+            self.window and self.window.set_cursor(cursor)  # type: ignore[union-attr]
+            self._cursor = cursor
+        except Exception:
+            self._cursor = None
+        self.connect("button-press-event", self._on_button_press)
+
+    def apply_theme(self, track: str, fill: str) -> None:
+        self._track = track
+        self._fill = fill
+        self.queue_draw()
+
+    def set_fraction(self, value: float) -> None:
+        self._fraction = max(0.0, min(1.0, float(value)))
+        self.queue_draw()
+
+    def do_realize(self) -> None:  # noqa: N802 — имя хука GTK
+        Gtk.DrawingArea.do_realize(self)
+        if self._cursor is not None:
+            self.get_window().set_cursor(self._cursor)
+
+    def do_draw(self, cr) -> bool:  # noqa: N802
+        width = self.get_allocated_width()
+        height = self.get_allocated_height()
+        radius = height / 2
+
+        # фон-дорожка
+        self._rounded_rect(cr, 0, 0, width, height, radius)
+        Gdk.cairo_set_source_rgba(cr, self._rgba(self._track))
+        cr.fill()
+
+        # заполненная часть
+        if self._fraction > 0:
+            filled = max(radius * 2, width * self._fraction)
+            self._rounded_rect(cr, 0, 0, filled, height, radius)
+            Gdk.cairo_set_source_rgba(cr, self._rgba(self._fill))
+            cr.fill()
+        return False
+
+    @staticmethod
+    def _rounded_rect(cr, x: float, y: float, w: float, h: float, r: float) -> None:
+        r = max(0.0, min(r, w / 2, h / 2))
+        cr.new_sub_path()
+        cr.arc(x + w - r, y + r, r, -1.5708, 0)
+        cr.arc(x + w - r, y + h - r, r, 0, 1.5708)
+        cr.arc(x + r, y + h - r, r, 1.5708, 3.1416)
+        cr.arc(x + r, y + r, r, 3.1416, 4.7124)
+        cr.close_path()
+
+    @staticmethod
+    def _rgba(spec: str) -> tuple[float, float, float, float]:
+        """Строка ``#rrggbb`` или ``rgba(r, g, b, a)`` → кортеж для cairo."""
+        spec = (spec or "").strip()
+        if spec.startswith("rgba("):
+            parts = spec[5:-1].split(",")
+            r, g, b = (float(p) / 255 for p in parts[:3])
+            a = float(parts[3]) if len(parts) > 3 else 1.0
+            return (r, g, b, a)
+        if spec.startswith("rgb("):
+            parts = spec[4:-1].split(",")
+            r, g, b = (float(p) / 255 for p in parts[:3])
+            return (r, g, b, 1.0)
+        value = spec.lstrip("#")
+        if len(value) >= 6:
+            return (
+                int(value[0:2], 16) / 255,
+                int(value[2:4], 16) / 255,
+                int(value[4:6], 16) / 255,
+                1.0,
+            )
+        return (0.39, 0.4, 0.95, 1.0)
+
+    def _on_button_press(self, _widget, event) -> bool:
+        if event.button == 1 and self.get_allocated_width() > 0:
+            fraction = max(0.0, min(1.0, event.x / self.get_allocated_width()))
+            self.set_fraction(fraction)
+            if self._on_seek:
+                self._on_seek(fraction)
+            return True
+        return False
+
+
+class PlaybackWidget(Gtk.Window):
+    """Полупрозрачный виджет управления воспроизведением поверх других окон."""
+
+    def __init__(self) -> None:
+        super().__init__(type=Gtk.WindowType.TOPLEVEL)
+
+        # Callbacks, которые проставляет приложение (замена pyqtSignal)
+        self.on_pause_resume: Callable[[], None] | None = None
+        self.on_stop: Callable[[], None] | None = None
+        self.on_speed_changed: Callable[[float], None] | None = None
+        self.on_rewind: Callable[[float], None] | None = None
+        self.on_seek_fraction: Callable[[float], None] | None = None
 
         self._is_dark = True
+        self._accent_color = "#6366f1"
+        self._is_paused = False
+        self._fade_source: int | None = None
+        self._hide_timer: int | None = None
+
         self._setup_window()
         self._setup_ui()
         self._position_bottom_right()
+        self.apply_theme(True, self._accent_color)
+
+    # ── Окно ─────────────────────────────────────────────────────────────────
+
+    def _setup_window(self) -> None:
+        self.set_decorated(False)
+        self.set_resizable(False)
+        self.set_skip_taskbar_hint(True)
+        self.set_skip_pager_hint(True)
+        self.set_keep_above(True)
+        self.set_accept_focus(False)
+        self.set_type_hint(Gdk.WindowTypeHint.UTILITY)
+        self.set_position(Gtk.WindowPosition.NONE)
+        self.set_size_request(WIDGET_WIDTH, WIDGET_HEIGHT)
+
+        # Прозрачный фон окна: сам фон рисуем на cairo, чтобы получить скругления.
+        screen = self.get_screen()
+        visual = screen.get_rgba_visual() if screen else None
+        if visual is not None and screen.is_composited():
+            self.set_visual(visual)
+        self.set_app_paintable(True)
+
+        self._css = Gtk.CssProvider()
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(),
+            self._css,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        )
+        self.set_name("playback-root")
+
+        # Перетаскивание за свободное место окна
+        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.connect("button-press-event", self._on_background_press)
+
+    def _setup_ui(self) -> None:
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.set_margin_top(10)
+        box.set_margin_bottom(10)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+        self.add(box)
+
+        # ── Верхний ряд: заголовок и кнопки ──────────────────────────────────
+        top_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        box.pack_start(top_row, False, False, 0)
+
+        self._label = Gtk.Label(label="🔊 Воспроизведение")
+        self._label.set_xalign(0.0)
+        top_row.pack_start(self._label, False, False, 0)
+        top_row.pack_start(Gtk.Box(), True, True, 0)  # растяжка
+
+        self._btn_rewind = self._make_button("◀◀", "Назад на 5 секунд", "playback-neutral")
+        self._btn_rewind.connect("clicked", lambda _b: self._emit_rewind(-5.0))
+        top_row.pack_start(self._btn_rewind, False, False, 0)
+
+        self._btn_pause = self._make_button("⏸", "Пауза / Продолжить", "playback-accent")
+        self._btn_pause.connect("clicked", lambda _b: self._on_pause_resume_clicked())
+        top_row.pack_start(self._btn_pause, False, False, 0)
+
+        self._btn_forward = self._make_button("▶▶", "Вперёд на 5 секунд", "playback-neutral")
+        self._btn_forward.connect("clicked", lambda _b: self._emit_rewind(5.0))
+        top_row.pack_start(self._btn_forward, False, False, 0)
+
+        self._btn_stop = self._make_button("⏹", "Остановить", "playback-danger")
+        self._btn_stop.connect("clicked", lambda _b: self._on_stop_clicked())
+        top_row.pack_start(self._btn_stop, False, False, 0)
+
+        # ── Полоса прогресса ─────────────────────────────────────────────────
+        self._progress = ProgressBar(self._on_timeline_clicked)
+        self._progress.set_tooltip_text("Нажмите для перемотки")
+        box.pack_start(self._progress, False, False, 0)
+
+        # ── Нижний ряд: скорость ─────────────────────────────────────────────
+        bottom_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        box.pack_start(bottom_row, False, False, 0)
+
+        self._speed_title = Gtk.Label(label="Скорость:")
+        self._speed_title.set_xalign(0.0)
+        bottom_row.pack_start(self._speed_title, False, False, 0)
+
+        # Шкала в реальных значениях скорости: 0.5×–3.0× шагом 0.25×
+        self._speed_slider = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.5, 3.0, 0.25)
+        self._speed_slider.set_draw_value(False)
+        self._speed_slider.set_value(1.0)
+        self._speed_slider.set_tooltip_text("Скорость воспроизведения")
+        self._speed_slider.set_sensitive(SPEED_AVAILABLE)
+        self._speed_slider.connect("value-changed", self._on_speed_changed)
+        bottom_row.pack_start(self._speed_slider, True, True, 0)
+
+        self._speed_value = Gtk.Label(label="1.0×")
+        self._speed_value.set_width_chars(4)
+        bottom_row.pack_start(self._speed_value, False, False, 0)
+
+        if not SPEED_AVAILABLE:
+            no_rb = Gtk.Label(label="(rubberband не найден)")
+            no_rb.set_name("playback-warning")
+            bottom_row.pack_start(no_rb, False, False, 0)
+
+    def _make_button(self, label: str, tooltip: str, css_class: str) -> Gtk.Button:
+        btn = Gtk.Button(label=label)
+        btn.set_size_request(30, 30)
+        btn.set_tooltip_text(tooltip)
+        btn.get_style_context().add_class(css_class)
+        return btn
+
+    # ── Тема ─────────────────────────────────────────────────────────────────
 
     def apply_theme(self, is_dark: bool = True, accent_color: str = "#6366f1") -> None:
         self._is_dark = is_dark
         self._accent_color = accent_color
+
         if is_dark:
-            self._label.setStyleSheet("color: #e2e8f0; font-size: 12px; font-weight: 600;")
-            self._speed_label_title.setStyleSheet("color: #94a3b8; font-size: 11px;")
-            self._speed_value_label.setStyleSheet("color: #e2e8f0; font-size: 11px; min-width: 32px;")
-            self._style_button(self._btn_rewind, neutral=True, is_dark=True)
-            self._style_button(self._btn_pause, is_dark=True, accent_color=accent_color)
-            self._style_button(self._btn_forward, neutral=True, is_dark=True)
-            self._style_button(self._btn_stop, danger=True, is_dark=True)
-            self._progress.setStyleSheet(f"""
-                QProgressBar {{
-                    background: rgba(255,255,255,0.15);
-                    border-radius: 2px; border: none;
-                }}
-                QProgressBar::chunk {{
-                    background: {accent_color};
-                    border-radius: 2px;
-                }}
-            """)
-            self._speed_slider.setStyleSheet(f"""
-                QSlider::groove:horizontal {{
-                    background: rgba(255,255,255,0.15);
-                    height: 4px; border-radius: 2px;
-                }}
-                QSlider::handle:horizontal {{
-                    background: {accent_color};
-                    width: 12px; height: 12px;
-                    margin: -4px 0; border-radius: 6px;
-                }}
-                QSlider::sub-page:horizontal {{
-                    background: {accent_color}; border-radius: 2px;
-                }}
-            """)
+            fg, muted = "#e2e8f0", "#94a3b8"
+            track = "rgba(255, 255, 255, 0.15)"
+            neutral_bg = "rgba(255, 255, 255, 0.12)"
+            neutral_hover = "rgba(255, 255, 255, 0.22)"
+            neutral_active = "rgba(255, 255, 255, 0.32)"
+            neutral_border = "rgba(255, 255, 255, 0.15)"
+            hover_accent = _lighten(accent_color, 1.2)
         else:
-            self._label.setStyleSheet("color: #0f172a; font-size: 12px; font-weight: 600;")
-            self._speed_label_title.setStyleSheet("color: #64748b; font-size: 11px;")
-            self._speed_value_label.setStyleSheet("color: #0f172a; font-size: 11px; min-width: 32px;")
-            self._style_button(self._btn_rewind, neutral=True, is_dark=False)
-            self._style_button(self._btn_pause, is_dark=False, accent_color=accent_color)
-            self._style_button(self._btn_forward, neutral=True, is_dark=False)
-            self._style_button(self._btn_stop, danger=True, is_dark=False)
-            self._progress.setStyleSheet(f"""
-                QProgressBar {{
-                    background: rgba(0,0,0,0.1);
-                    border-radius: 2px; border: none;
-                }}
-                QProgressBar::chunk {{
-                    background: {accent_color};
-                    border-radius: 2px;
-                }}
-            """)
-            self._speed_slider.setStyleSheet(f"""
-                QSlider::groove:horizontal {{
-                    background: rgba(0,0,0,0.1);
-                    height: 4px; border-radius: 2px;
-                }}
-                QSlider::handle:horizontal {{
-                    background: {accent_color};
-                    width: 12px; height: 12px;
-                    margin: -4px 0; border-radius: 6px;
-                }}
-                QSlider::sub-page:horizontal {{
-                    background: {accent_color}; border-radius: 2px;
-                }}
-            """)
-        self.update()
+            fg, muted = "#0f172a", "#64748b"
+            track = "rgba(0, 0, 0, 0.1)"
+            neutral_bg = "rgba(0, 0, 0, 0.06)"
+            neutral_hover = "rgba(0, 0, 0, 0.12)"
+            neutral_active = "rgba(0, 0, 0, 0.2)"
+            neutral_border = "rgba(0, 0, 0, 0.12)"
+            hover_accent = _lighten(accent_color, 0.87)
 
-    # ── Setup ─────────────────────────────────────────────────────────────────
-
-    def _setup_window(self) -> None:
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        self.setGraphicsEffect(self._opacity_effect)
-        self._opacity_effect.setOpacity(0.0)
-        self.setFixedSize(360, 95)
-
-    def _setup_ui(self) -> None:
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(12, 10, 12, 10)
-        main_layout.setSpacing(6)
-
-        # ── Top row: label + controls ────────────────────────────────────────
-        top_row = QHBoxLayout()
-        top_row.setSpacing(6)
-
-        self._label = QLabel("🔊 Воспроизведение")
-        self._label.setStyleSheet("color: #e2e8f0; font-size: 12px; font-weight: 600;")
-        top_row.addWidget(self._label)
-
-        top_row.addStretch()
-
-        self._btn_rewind = QPushButton("◀◀")
-        self._btn_rewind.setFixedSize(30, 30)
-        self._btn_rewind.setToolTip("Назад на 5 секунд")
-        self._btn_rewind.clicked.connect(lambda: self._on_rewind_clicked(-5.0))
-        self._style_button(self._btn_rewind, neutral=True)
-        top_row.addWidget(self._btn_rewind)
-
-        self._btn_pause = QPushButton("⏸")
-        self._btn_pause.setFixedSize(30, 30)
-        self._btn_pause.setToolTip("Пауза / Продолжить")
-        self._btn_pause.clicked.connect(self._on_pause_resume)
-        self._style_button(self._btn_pause)
-        top_row.addWidget(self._btn_pause)
-
-        self._btn_forward = QPushButton("▶▶")
-        self._btn_forward.setFixedSize(30, 30)
-        self._btn_forward.setToolTip("Вперед на 5 секунд")
-        self._btn_forward.clicked.connect(lambda: self._on_rewind_clicked(5.0))
-        self._style_button(self._btn_forward, neutral=True)
-        top_row.addWidget(self._btn_forward)
-
-        self._btn_stop = QPushButton("⏹")
-        self._btn_stop.setFixedSize(30, 30)
-        self._btn_stop.setToolTip("Остановить")
-        self._btn_stop.clicked.connect(self._on_stop_clicked)
-        self._style_button(self._btn_stop, danger=True)
-        top_row.addWidget(self._btn_stop)
-
-        main_layout.addLayout(top_row)
-
-        # ── Progress bar ─────────────────────────────────────────────────────
-        self._progress = ClickableProgressBar()
-        self._progress.setRange(0, 100)
-        self._progress.setValue(0)
-        self._progress.setTextVisible(False)
-        self._progress.setFixedHeight(6)
-        self._progress.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._progress.setToolTip("Нажмите для перемотки")
-        self._progress.position_clicked.connect(self._on_timeline_clicked)
-        self._progress.setStyleSheet("""
-            QProgressBar {
-                background: rgba(255,255,255,0.15);
-                border-radius: 2px;
-                border: none;
-            }
-            QProgressBar::chunk {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #6366f1, stop:1 #8b5cf6);
-                border-radius: 2px;
-            }
-        """)
-        main_layout.addWidget(self._progress)
-
-        # ── Bottom row: speed ─────────────────────────────────────────────────
-        bottom_row = QHBoxLayout()
-        bottom_row.setSpacing(6)
-
-        self._speed_label_title = QLabel("Скорость:")
-        self._speed_label_title.setStyleSheet("color: #94a3b8; font-size: 11px;")
-        bottom_row.addWidget(self._speed_label_title)
-
-        self._speed_slider = QSlider(Qt.Orientation.Horizontal)
-        self._speed_slider.setRange(2, 12)   # 0.5x–3.0x in steps of 0.25
-        self._speed_slider.setValue(4)        # 1.0x default
-        self._speed_slider.setToolTip("Скорость воспроизведения")
-        self._speed_slider.setEnabled(SPEED_AVAILABLE)
-        self._speed_slider.valueChanged.connect(self._on_speed_changed)
-        self._speed_slider.setStyleSheet("""
-            QSlider::groove:horizontal {
-                background: rgba(255,255,255,0.15);
-                height: 4px; border-radius: 2px;
-            }
-            QSlider::handle:horizontal {
-                background: #6366f1;
-                width: 12px; height: 12px;
-                margin: -4px 0; border-radius: 6px;
-            }
-            QSlider::sub-page:horizontal {
-                background: #6366f1; border-radius: 2px;
-            }
-        """)
-        bottom_row.addWidget(self._speed_slider)
-
-        self._speed_value_label = QLabel("1.0×")
-        self._speed_value_label.setStyleSheet("color: #e2e8f0; font-size: 11px; min-width: 32px;")
-        bottom_row.addWidget(self._speed_value_label)
-
-        if not SPEED_AVAILABLE:
-            no_rb = QLabel("(rubberband не найден)")
-            no_rb.setStyleSheet("color: #f59e0b; font-size: 10px;")
-            bottom_row.addWidget(no_rb)
-
-        main_layout.addLayout(bottom_row)
-        self.apply_theme(self._is_dark, getattr(self, "_accent_color", "#6366f1"))
-
-    def _on_timeline_clicked(self, fraction: float) -> None:
-        self.set_progress(fraction)
-        self.seek_fraction_clicked.emit(fraction)
-
-    def _on_rewind_clicked(self, seconds: float) -> None:
-        self.rewind_clicked.emit(seconds)
-
-    def _on_stop_clicked(self) -> None:
-        self.schedule_hide(150)
-        self.stop_clicked.emit()
-
-    def _style_button(
-        self,
-        btn: QPushButton,
-        danger: bool = False,
-        neutral: bool = False,
-        is_dark: bool = True,
-        accent_color: str = "#6366f1",
-    ) -> None:
-        if neutral:
-            bg = "rgba(255,255,255,0.12)" if is_dark else "rgba(0,0,0,0.06)"
-            fg = "#ffffff" if is_dark else "#0f172a"
-            border = "rgba(255,255,255,0.15)" if is_dark else "rgba(0,0,0,0.12)"
-            hover_bg = "rgba(255,255,255,0.22)" if is_dark else "rgba(0,0,0,0.12)"
-            pressed_bg = "rgba(255,255,255,0.32)" if is_dark else "rgba(0,0,0,0.2)"
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    background: {bg};
-                    color: {fg};
-                    border: 1px solid {border};
-                    border-radius: 8px;
-                    font-size: 10px;
-                    font-weight: bold;
-                }}
-                QPushButton:hover {{
-                    background: {hover_bg};
-                    border-color: {border};
-                    color: {fg};
-                }}
-                QPushButton:pressed {{
-                    background: {pressed_bg};
-                    color: {fg};
-                }}
-            """)
-            return
-
-        hover_acc = QColor(accent_color).lighter(120).name() if is_dark else QColor(accent_color).darker(115).name()
-        accent = "#ef4444" if danger else accent_color
-        hover = "#dc2626" if danger else hover_acc
-        bg = "rgba(255,255,255,0.12)" if is_dark else "rgba(0,0,0,0.06)"
-        fg = "white" if is_dark else "#0f172a"
-        border = "rgba(255,255,255,0.15)" if is_dark else "rgba(0,0,0,0.12)"
-        btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {bg};
+        self._css.load_from_data(
+            f"""
+            #playback-root {{ background-color: transparent; }}
+            #playback-root label {{ color: {fg}; font-size: 12px; font-weight: 600; }}
+            #playback-root #playback-warning {{ color: #f59e0b; font-size: 10px; font-weight: normal; }}
+            .playback-neutral {{
+                background-image: none;
+                background-color: {neutral_bg};
                 color: {fg};
-                border: 1px solid {border};
+                border: 1px solid {neutral_border};
+                border-radius: 8px;
+                font-size: 10px;
+                font-weight: bold;
+                padding: 0;
+                text-shadow: none;
+                box-shadow: none;
+            }}
+            .playback-neutral:hover {{
+                background-color: {neutral_hover};
+                color: {fg};
+            }}
+            .playback-neutral:active {{
+                background-color: {neutral_active};
+            }}
+            .playback-accent {{
+                background-image: none;
+                background-color: {neutral_bg};
+                color: {fg};
+                border: 1px solid {neutral_border};
                 border-radius: 8px;
                 font-size: 14px;
+                padding: 0;
+                text-shadow: none;
+                box-shadow: none;
             }}
-            QPushButton:hover {{
-                background: {accent};
-                border-color: {accent};
-                color: white;
+            .playback-accent:hover {{
+                background-color: {accent_color};
+                border-color: {accent_color};
+                color: #ffffff;
             }}
-            QPushButton:pressed {{
-                background: {hover};
-                color: white;
+            .playback-accent:active {{
+                background-color: {hover_accent};
+                color: #ffffff;
             }}
-        """)
+            .playback-danger {{
+                background-image: none;
+                background-color: {neutral_bg};
+                color: {fg};
+                border: 1px solid {neutral_border};
+                border-radius: 8px;
+                font-size: 14px;
+                padding: 0;
+                text-shadow: none;
+                box-shadow: none;
+            }}
+            .playback-danger:hover {{
+                background-color: #ef4444;
+                border-color: #ef4444;
+                color: #ffffff;
+            }}
+            .playback-danger:active {{ background-color: #dc2626; color: #ffffff; }}
+            scale trough {{
+                background-color: {track};
+                border-radius: 2px;
+                min-height: 4px;
+            }}
+            scale highlight {{
+                background-color: {accent_color};
+                border-radius: 2px;
+            }}
+            scale slider {{
+                background-color: {accent_color};
+                border: none;
+                border-radius: 6px;
+                min-width: 12px;
+                min-height: 12px;
+                margin: -4px 0;
+            }}
+            """.encode("utf-8")
+        )
 
-    # ── Positioning ───────────────────────────────────────────────────────────
+        if is_dark:
+            self._label.set_markup(f'<span foreground="{fg}" size="small" weight="bold">🔊 Воспроизведение</span>')
+        else:
+            self._label.set_markup(f'<span foreground="{fg}" size="small" weight="bold">🔊 Воспроизведение</span>')
+        self._speed_title.set_markup(f'<span foreground="{muted}" size="small">Скорость:</span>')
+        self._speed_value.set_markup(f'<span foreground="{fg}" size="small">{self._speed_slider.get_value():.2g}×</span>')
+
+        self._progress.apply_theme(track, accent_color)
+        if self._is_paused:
+            self.set_paused(True)
+        self.queue_draw()
+
+    # ── Отрисовка фона окна ──────────────────────────────────────────────────
+
+    def do_draw(self, cr) -> bool:  # noqa: N802
+        width = self.get_allocated_width()
+        height = self.get_allocated_height()
+
+        cr.new_sub_path()
+        cr.arc(width - CORNER_RADIUS, CORNER_RADIUS, CORNER_RADIUS, -1.5708, 0)
+        cr.arc(width - CORNER_RADIUS, height - CORNER_RADIUS, CORNER_RADIUS, 0, 1.5708)
+        cr.arc(CORNER_RADIUS, height - CORNER_RADIUS, CORNER_RADIUS, 1.5708, 3.1416)
+        cr.arc(CORNER_RADIUS, CORNER_RADIUS, CORNER_RADIUS, 3.1416, 4.7124)
+        cr.close_path()
+
+        if self._is_dark:
+            cr.set_source_rgba(24 / 255, 24 / 255, 27 / 255, 1.0)
+        else:
+            cr.set_source_rgba(1.0, 1.0, 1.0, 1.0)
+        cr.fill_preserve()
+        if self._is_dark:
+            cr.set_source_rgba(1, 1, 1, 0.1)
+        else:
+            cr.set_source_rgba(0, 0, 0, 0.16)
+        cr.set_line_width(1.0)
+        cr.stroke()
+        return False  # дети рисуются поверх
+
+    # ── Позиция и показ ──────────────────────────────────────────────────────
 
     def _position_bottom_right(self) -> None:
-        screen = QApplication.primaryScreen()
-        if screen is None:
+        display = Gdk.Display.get_default()
+        if display is None:
             return
-        geom: QRect = screen.availableGeometry()
-        x = geom.right() - self.width() - 16
-        y = geom.bottom() - self.height() - 16
+        monitor = display.get_primary_monitor() or display.get_monitor(0)
+        if monitor is None:
+            return
+        workarea = monitor.get_workarea()
+        x = workarea.x + workarea.width - WIDGET_WIDTH - 16
+        y = workarea.y + workarea.height - WIDGET_HEIGHT - 16
         self.move(x, y)
 
     def restore_position(self, x: int, y: int) -> None:
-        """Restore a previously saved widget position."""
         if x < 0 or y < 0:
             self._position_bottom_right()
         else:
             self.move(x, y)
 
-    # ── Show/hide with animation ──────────────────────────────────────────────
-
     def fade_in(self) -> None:
-        self._hide_timer.stop()
-        if self._fade_anim:
-            self._fade_anim.stop()
-            self._fade_anim = None
-        self._opacity_effect.setOpacity(1.0)
-        self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
-        self.show()
-        self.raise_()
-
-    def _fade_out(self) -> None:
-        if self._fade_anim:
-            self._fade_anim.stop()
-            self._fade_anim = None
-        anim = QPropertyAnimation(self._opacity_effect, b"opacity", self)
-        anim.setDuration(300)
-        anim.setStartValue(self._opacity_effect.opacity())
-        anim.setEndValue(0.0)
-        anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
-        anim.finished.connect(self._on_fade_out_finished)
-        self._fade_anim = anim
-        anim.start()
-
-    def _on_fade_out_finished(self) -> None:
-        if self._opacity_effect.opacity() <= 0.05:
-            self.hide()
+        self._cancel_hide_timer()
+        self._stop_fade()
+        self.set_opacity(1.0)
+        self.set_keep_above(True)
+        self.show_all()
+        self.present()
 
     def schedule_hide(self, delay_ms: int = 2000) -> None:
-        self._hide_timer.start(delay_ms)
+        self._cancel_hide_timer()
+        self._hide_timer = GLib.timeout_add(max(1, int(delay_ms)), self._begin_fade_out)
 
-    # ── Public slots ──────────────────────────────────────────────────────────
+    def _begin_fade_out(self) -> bool:
+        self._hide_timer = None
+        self._stop_fade()
+        self._fade_source = GLib.timeout_add(16, self._fade_step, 1.0)
+        return False  # одноразовый таймер
+
+    def _fade_step(self, opacity: float) -> bool:
+        opacity -= 0.08
+        if opacity <= 0.0:
+            self.set_opacity(0.0)
+            self._fade_source = None
+            self.hide()
+            return False
+        self.set_opacity(opacity)
+        self._fade_source = GLib.timeout_add(16, self._fade_step, opacity)
+        return False
+
+    def _stop_fade(self) -> None:
+        if self._fade_source is not None:
+            GLib.source_remove(self._fade_source)
+            self._fade_source = None
+
+    def _cancel_hide_timer(self) -> None:
+        if self._hide_timer is not None:
+            GLib.source_remove(self._hide_timer)
+            self._hide_timer = None
+
+    # ── Публичные слоты ──────────────────────────────────────────────────────
 
     def set_progress(self, value: float) -> None:
-        """Update progress bar. value is 0.0–1.0."""
-        self._progress.setValue(int(value * 100))
+        self._progress.set_fraction(value)
 
     def set_paused(self, paused: bool) -> None:
         self._is_paused = paused
-        self._btn_pause.setText("▶" if paused else "⏸")
-        self._label.setText("⏸ Пауза" if paused else "🔊 Воспроизведение")
+        self._btn_pause.set_label("▶" if paused else "⏸")
+        self._label.set_text("⏸ Пауза" if paused else "🔊 Воспроизведение")
 
     def set_speed(self, speed: float) -> None:
-        """Sync slider to a given speed (0.5–3.0)."""
-        ticks = int(round(speed / 0.25))
-        self._speed_slider.blockSignals(True)
-        self._speed_slider.setValue(max(2, min(12, ticks)))
-        self._speed_slider.blockSignals(False)
-        self._speed_value_label.setText(f"{speed:.2g}×")
+        clamped = max(0.5, min(3.0, round(float(speed) / 0.25) * 0.25))
+        self._speed_slider.handler_block_by_func(self._on_speed_changed)
+        self._speed_slider.set_value(clamped)
+        self._speed_slider.handler_unblock_by_func(self._on_speed_changed)
+        self._speed_value.set_text(f"{clamped:.2g}×")
 
-    # ── Event handlers ────────────────────────────────────────────────────────
+    # ── Обработчики ──────────────────────────────────────────────────────────
 
-    def _on_pause_resume(self) -> None:
-        self.pause_resume_clicked.emit()
+    def _on_pause_resume_clicked(self) -> None:
+        if self.on_pause_resume:
+            self.on_pause_resume()
 
-    def _on_speed_changed(self, tick: int) -> None:
-        speed = tick * 0.25
-        self._speed_value_label.setText(f"{speed:.2g}×")
-        self.speed_changed.emit(speed)
+    def _on_stop_clicked(self) -> None:
+        self.schedule_hide(150)
+        if self.on_stop:
+            self.on_stop()
 
-    def enterEvent(self, event) -> None:
-        self._hide_timer.stop()
-        if self._fade_anim:
-            self._fade_anim.stop()
-            self._fade_anim = None
-        self._opacity_effect.setOpacity(1.0)
-        super().enterEvent(event)
+    def _emit_rewind(self, seconds: float) -> None:
+        if self.on_rewind:
+            self.on_rewind(seconds)
 
-    def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            child = self.childAt(event.position().toPoint())
-            if child is None or child is self:
-                self._dragging = True
-                self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-        super().mousePressEvent(event)
+    def _on_timeline_clicked(self, fraction: float) -> None:
+        self.set_progress(fraction)
+        if self.on_seek_fraction:
+            self.on_seek_fraction(fraction)
 
-    def mouseMoveEvent(self, event) -> None:
-        if self._dragging and event.buttons() & Qt.MouseButton.LeftButton:
-            self.move(event.globalPosition().toPoint() - self._drag_offset)
-        super().mouseMoveEvent(event)
+    def _on_speed_changed(self, scale: Gtk.Scale) -> None:
+        speed = round(scale.get_value() * 4) / 4  # кратно 0.25
+        self._speed_value.set_text(f"{speed:.2g}×")
+        if self.on_speed_changed:
+            self.on_speed_changed(speed)
 
-    def mouseReleaseEvent(self, event) -> None:
-        self._dragging = False
-        super().mouseReleaseEvent(event)
+    def _on_background_press(self, _widget, event) -> bool:
+        """Перетаскивание окна за фон: дети события не отдают, поэтому только пустые места."""
+        if event.button == 1:
+            self.begin_move_drag(event.button, int(event.x_root), int(event.y_root), event.time)
+            return True
+        return False
 
-    # ── Painting — frosted glass background ──────────────────────────────────
+    # Наведение мышью отменяет автоскрытие, как в Qt-версии
+    def do_enter_notify_event(self, _event) -> bool:  # noqa: N802
+        self._cancel_hide_timer()
+        self._stop_fade()
+        self.set_opacity(1.0)
+        return False
 
-    def paintEvent(self, event) -> None:
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        path = QPainterPath()
-        path.addRoundedRect(0, 0, self.width(), self.height(), 14, 14)
+def _lighten(color: str, factor: float) -> str:
+    from .theme_manager import shift_color
 
-        if self._is_dark:
-            painter.fillPath(path, QColor(24, 24, 27, 255))
-            painter.setPen(QColor(255, 255, 255, 25))
-        else:
-            painter.fillPath(path, QColor(255, 255, 255, 255))
-            painter.setPen(QColor(0, 0, 0, 40))
-
-        painter.drawPath(path)
+    return shift_color(color, factor)

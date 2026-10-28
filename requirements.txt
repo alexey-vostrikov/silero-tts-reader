@@ -1,8 +1,11 @@
-PyQt6>=6.4.0
+# GTK-версия: PyGObject поставляется дистрибутивом (python3-gi + gir1.2-gtk-3.0),
+# ставить его через pip не нужно и не рекомендуется.
 pynput>=1.7.6
 sounddevice>=0.4.6
 numpy>=1.24.0
 torch>=2.0.0
 pyperclip>=1.8.2
+# Работа с выделением текста в X11 (XWayland)
+python-xlib>=0.33
 # Optional: for pitch-independent speed control
 # pyrubberband>=0.3.0

@@ -9,4 +9,6 @@ Type=Application
 Categories=Accessibility;Utility;
 Keywords=tts;text;speech;silero;read;
 StartupNotify=false
+StartupWMClass=silero-tts-reader
 X-GNOME-Autostart-enabled=true
+X-GNOME-UsesNotifications=true
