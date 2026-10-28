@@ -179,8 +179,8 @@ Installed-Size: $INSTALLED_SIZE
 Section: sound
 Priority: optional
 Homepage: $HOMEPAGE
-Depends: python3 (>= 3.10), python3-gi, gir1.2-glib-2.0, gir1.2-gtk-3.0, python3-numpy
-Recommends: python3-sounddevice, python3-torch, python3-pynput, python3-evdev, gir1.2-ayatanaappindicator3-0.1, gsettings-desktop-schemas, rubberband-cli, xdotool, xclip
+Depends: python3 (>= 3.10), python3-gi, gir1.2-glib-2.0, gir1.2-gtk-3.0, python3-numpy, gir1.2-ayatanaappindicator3-0.1, rubberband-cli
+Recommends: python3-sounddevice, python3-torch, python3-pynput, python3-evdev, gsettings-desktop-schemas, xdotool, xclip
 Suggests: python3-pyrubberband
 Description: Silero TTS reader with global hotkeys and system tray
  Reads the selected text or the clipboard aloud using the Silero TTS v5 model.

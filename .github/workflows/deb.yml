@@ -115,8 +115,11 @@ jobs:
         run: |
           set -euo pipefail
           deb="$(ls dist/*.deb)"
+          # Ставим ровно то, что перечислено в Depends: если пакет добавит
+          # зависимость, которой здесь нет, dpkg -i ниже упадёт.
           DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-            python3-gi gir1.2-gtk-3.0 gir1.2-glib-2.0 python3-numpy
+            python3-gi gir1.2-glib-2.0 gir1.2-gtk-3.0 python3-numpy \
+            gir1.2-ayatanaappindicator3-0.1 rubberband-cli
 
           # Без --force-depends: пакет обязан ставиться на чистой системе,
           # все его Depends должны быть доступны в архиве Ubuntu.
@@ -124,6 +127,16 @@ jobs:
 
           test -x /usr/bin/silero-tts-reader
           bash -n /usr/bin/silero-tts-reader
+
+          # Зависимости трея и управления скоростью должны быть рабочими
+          python3 - <<'PY'
+          import gi
+          gi.require_version("AyatanaAppIndicator3", "0.1")
+          from gi.repository import AyatanaAppIndicator3  # noqa: F401
+          print("  ✓ индикатор трея доступен (gir1.2-ayatanaappindicator3-0.1)")
+          PY
+          command -v rubberband >/dev/null
+          echo "  ✓ rubberband-cli на месте: $(rubberband --version 2>&1 | head -1)"
 
           # Проверка установленного дерева, а не рабочей копии: каталог сменён,
           # иначе sys.path[0] = каталог репозитория и импорт берёт исходники.
