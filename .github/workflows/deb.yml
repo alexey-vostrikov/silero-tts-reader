@@ -33,6 +33,18 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
             ca-certificates git python3 python3-pil
 
+      - name: Prepare git
+        run: |
+          set -euo pipefail
+          # В job с container шаги идут от root, а рабочая копия принадлежит другому
+          # uid: без safe.directory git молча отказывается работать, и версия пакета
+          # теряет суффикс с коммитом.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git --version
+          echo "HEAD:    $(git rev-parse --short HEAD)"
+          echo "describe: $(git describe --tags --always 2>&1 || true)"
+          echo "dirty:   $(git status --porcelain | head -3 || true)"
+
       - name: Headless GTK tests
         run: |
           DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
