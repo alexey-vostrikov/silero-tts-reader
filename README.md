@@ -140,8 +140,9 @@ pip install -r requirements.txt pyrubberband
 VERSION=2.0.0 ./packaging/build-deb.sh   # версию можно задать явно
 ```
 
-Версия берётся из `git describe` (например `2.0.0+git1c65e53`), поэтому тэг `v2.0.0` в репозитории
-даёт «чистую» версию пакета. Установка и удаление:
+Версия пакета детерминирована: тег `v2.1.0` на HEAD даёт `2.1.0`, при коммитах после тега —
+`2.1.0+7.gabc1234`, без тегов вовсе — `<version из pyproject.toml>+gitabc1234`, а неубранные правки
+добавляют `.dirty`. Установка и удаление:
 
 ```bash
 sudo apt install ./dist/silero-tts-reader_*_all.deb   # зависимости подтянутся из архива
