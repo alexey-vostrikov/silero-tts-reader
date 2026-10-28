@@ -1,0 +1,184 @@
+name: deb
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# GH Actions на Linux и так запускает шаги в bash; в act по умолчанию sh,
+# а в шагах используется pipefail — поэтому оболочка задаётся явно.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  deb:
+    name: build .deb
+    runs-on: ubuntu-24.04
+    container: ubuntu:24.04
+    outputs:
+      version: ${{ steps.build.outputs.version }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # git describe нужен для версии пакета
+
+      - name: Build dependencies
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            ca-certificates git python3 python3-pil
+
+      - name: Headless GTK tests
+        run: |
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            python3-gi gir1.2-gtk-3.0 gir1.2-glib-2.0 python3-numpy xvfb
+          xvfb-run -a python3 tests/smoke_gtk.py
+
+      - name: Build package
+        id: build
+        run: |
+          set -euo pipefail
+          ./packaging/build-deb.sh | tee build.log
+          deb="$(ls dist/*.deb)"
+          version="$(dpkg-deb -f "$deb" Version)"
+          echo "deb=$deb" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "### собрано: \`$(basename "$deb")\` ($(du -h "$deb" | cut -f1))" >> "$GITHUB_STEP_SUMMARY"
+          dpkg-deb --info "$deb" | sed -n '1,25p' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Inspect package contents
+        run: |
+          set -euo pipefail
+          deb="$(ls dist/*.deb)"
+          listing="$(mktemp)"
+          dpkg-deb --contents "$deb" > "$listing"
+          sed 's/^/  /' "$listing"
+
+          required="
+          ./usr/bin/silero-tts-reader
+          ./usr/share/applications/silero-tts-reader.desktop
+          ./usr/share/icons/hicolor/256x256/apps/silero-tts-reader.png
+          ./usr/share/pixmaps/silero-tts-reader.png
+          ./usr/lib/silero-tts-reader/run.py
+          ./usr/lib/silero-tts-reader/silero_tts_reader/app.py
+          ./usr/lib/silero-tts-reader/silero_tts_reader/ui/playback_widget.py
+          ./usr/lib/systemd/user/silero-tts-reader.service
+          ./usr/share/doc/silero-tts-reader/copyright
+          "
+          # Сравнение по последнему полю строки листинга: путь не должен быть
+          # подстрокой другого (…silero-tts-reader и …silero-tts-reader.desktop).
+          # Пайплайн с «grep -q» здесь не годится: он закрывает поток раньше,
+          # dpkg-deb получает SIGPIPE, и с pipefail шаг ложно падает.
+          missing=0
+          for path in $required; do
+            if awk -v p="$path" '$NF == p { found = 1 } END { exit(found ? 0 : 1) }' "$listing"; then
+              echo "  ✓ $path"
+            else
+              echo "  ✗ нет в пакете: $path"
+              missing=$((missing + 1))
+            fi
+          done
+          # байткод и кеши в пакет попадать не должны
+          if grep -qE '__pycache__|\.pyc' "$listing"; then
+            echo "  ✗ в пакете есть __pycache__/.pyc"
+            missing=$((missing + 1))
+          else
+            echo "  ✓ байткода в пакете нет"
+          fi
+          rm -f "$listing"
+          test "$missing" -eq 0
+
+      - name: Install into a clean system
+        run: |
+          set -euo pipefail
+          deb="$(ls dist/*.deb)"
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            python3-gi gir1.2-gtk-3.0 gir1.2-glib-2.0 python3-numpy
+
+          # Без --force-depends: пакет обязан ставиться на чистой системе,
+          # все его Depends должны быть доступны в архиве Ubuntu.
+          dpkg -i "$deb"
+
+          test -x /usr/bin/silero-tts-reader
+          bash -n /usr/bin/silero-tts-reader
+
+          # Проверка установленного дерева, а не рабочей копии: каталог сменён,
+          # иначе sys.path[0] = каталог репозитория и импорт берёт исходники.
+          ( cd / && PYTHONPATH=/usr/lib/silero-tts-reader python3 - <<'PY'
+          import pathlib
+          import silero_tts_reader
+          from silero_tts_reader.ui import theme_manager, tray_icon
+          print("  ✓ модули импортируются из установленного дерева:", theme_manager.__file__)
+          assert theme_manager.__file__.startswith("/usr/lib/silero-tts-reader/"), theme_manager.__file__
+          for path in (
+              "/usr/bin/silero-tts-reader",
+              "/usr/share/applications/silero-tts-reader.desktop",
+              "/usr/share/icons/hicolor/128x128/apps/silero-tts-reader.png",
+              "/usr/lib/systemd/user/silero-tts-reader.service",
+          ):
+              assert pathlib.Path(path).exists(), path
+          print("  ✓ файлы пакета на своих местах")
+          PY
+          )
+
+          xvfb-run -a python3 - <<'PY'
+          import gi
+          gi.require_version("Gtk", "3.0")
+          from gi.repository import Gtk
+          ok, _ = Gtk.init_check(None)
+          print("  ✓ GTK инициализируется в установленной системе:", ok)
+          PY
+
+          # Запускатор обязан внятно сказать про отсутствующие pip-модули
+          # (sounddevice и torch в архиве Ubuntu отсутствуют), а не падать трассировкой.
+          set +e
+          out="$(/usr/bin/silero-tts-reader 2>&1)"
+          rc=$?
+          set -e
+          printf '%s\n' "$out" | sed 's/^/    /'
+          test "$rc" -eq 1
+          printf '%s' "$out" | grep -q "не хватает Python-модулей"
+          printf '%s' "$out" | grep -q "sounddevice"
+          echo "  ✓ запускатор сообщает об отсутствующих модулях и подсказывает установку"
+
+          dpkg -r silero-tts-reader
+          test ! -e /usr/bin/silero-tts-reader
+
+      - name: Upload artifact
+        if: ${{ !env.ACT }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: silero-tts-reader-deb
+          path: dist/*.deb
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: attach .deb to the release
+    needs: deb
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: silero-tts-reader-deb
+          path: dist
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          gh release upload "$TAG" dist/*.deb --clobber
+          gh release view "$TAG" --json assets -q '.assets[].name'

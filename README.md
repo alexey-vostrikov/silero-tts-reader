@@ -131,6 +131,47 @@ pip install -r requirements.txt pyrubberband
 
 ---
 
+## 📦 Сборка и установка .deb
+
+Пакет собирается без `debhelper` — достаточно `dpkg-deb` и `python3-pil` (для иконок):
+
+```bash
+./packaging/build-deb.sh          # результат: dist/silero-tts-reader_<версия>_all.deb
+VERSION=2.0.0 ./packaging/build-deb.sh   # версию можно задать явно
+```
+
+Версия берётся из `git describe` (например `2.0.0+git1c65e53`), поэтому тэг `v2.0.0` в репозитории
+даёт «чистую» версию пакета. Установка и удаление:
+
+```bash
+sudo apt install ./dist/silero-tts-reader_*_all.deb   # зависимости подтянутся из архива
+sudo dpkg -r silero-tts-reader
+```
+
+Что ставится: код в `/usr/lib/silero-tts-reader`, запускатор `/usr/bin/silero-tts-reader`,
+`.desktop` в `/usr/share/applications`, иконки в теме `hicolor`, user-unit
+`/usr/lib/systemd/user/silero-tts-reader.service` (не включается автоматически).
+
+`Depends` пакета ограничены тем, что реально есть в архиве Ubuntu (`python3-gi`,
+`gir1.2-gtk-3.0`, `python3-numpy` и т. д.). `torch` и `sounddevice` в архиве Ubuntu отсутствуют —
+они в `Recommends`, а запускатор проверяет их наличие и подсказывает команду установки:
+
+```bash
+sudo apt install python3-pip
+python3 -m pip install --user --break-system-packages sounddevice torch
+```
+
+Сборка в CI — `.github/workflows/deb.yml`: на каждый push/PR собирается пакет, проверяется состав
+(`dpkg-deb --contents`), ставится на чистую систему (`dpkg -i` без `--force-depends`), сверяется, что
+GTK инициализируется и запускатор даёт внятное сообщение об отсутствующих pip-модулях; на тег `v*`
+пакет прикрепляется к релизу. Локальная отладка workflow — `act`:
+
+```bash
+act -W .github/workflows/deb.yml -j deb     # конфигурация образов — в ~/.actrc
+```
+
+---
+
 ## 💻 Использование
 
 ### Запуск приложения
