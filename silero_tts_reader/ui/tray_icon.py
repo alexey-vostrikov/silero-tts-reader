@@ -32,9 +32,26 @@ for _namespace in ("AyatanaAppIndicator3", "AppIndicator3"):
         _AppIndicator = None
 
 
+# Куда пакет кладёт иконку. В репозитории она лежит рядом с кодом (assets),
+# а в установленной системе — в теме hicolor и в /usr/share/pixmaps.
+ICON_CANDIDATES = (
+    _ASSETS_DIR / "icon.png",
+    Path("/usr/share/icons/hicolor/256x256/apps/silero-tts-reader.png"),
+    Path("/usr/share/icons/hicolor/128x128/apps/silero-tts-reader.png"),
+    Path("/usr/share/pixmaps/silero-tts-reader.png"),
+)
+
+
 def icon_path() -> str:
-    path = _ASSETS_DIR / "icon.png"
-    return str(path) if path.exists() else ""
+    """Путь к иконке приложения: из репозитория или из установленного пакета.
+
+    Иначе в установленной системе функция возвращала пустую строку, и трей
+    молча считался недоступным (`TrayIcon.available == False`).
+    """
+    for candidate in ICON_CANDIDATES:
+        if candidate.exists():
+            return str(candidate)
+    return ""
 
 
 class TrayIcon:

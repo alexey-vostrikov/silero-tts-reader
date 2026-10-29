@@ -57,6 +57,14 @@ jobs:
             python3-gi gir1.2-gtk-3.0 gir1.2-glib-2.0 python3-numpy xvfb
           xvfb-run -a python3 tests/smoke_gtk.py
 
+      - name: Hotkey tests
+        run: |
+          # Регрессия: pynput-ветка роняла приложение на старте (dict как ключ
+          # словаря). В образе pynput нет — тест подставляет пустышку и
+          # отдельным прогоном проверяет систему совсем без pynput.
+          python3 tests/test_hotkeys.py
+          python3 tests/run_hotkeys_without_pynput.py
+
       - name: Build packages
         id: build
         run: |
