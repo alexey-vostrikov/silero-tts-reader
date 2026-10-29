@@ -18,7 +18,7 @@ jobs:
   deb:
     name: build .deb
     runs-on: ubuntu-26.04
-    container: ubuntu:24.04
+    container: ubuntu:26.04
     outputs:
       version: ${{ steps.build.outputs.version }}
     steps:
@@ -57,76 +57,107 @@ jobs:
             python3-gi gir1.2-gtk-3.0 gir1.2-glib-2.0 python3-numpy xvfb
           xvfb-run -a python3 tests/smoke_gtk.py
 
-      - name: Build package
+      - name: Build packages
         id: build
         run: |
           set -euo pipefail
           ./packaging/build-deb.sh | tee build.log
-          deb="$(ls dist/*.deb)"
-          version="$(dpkg-deb -f "$deb" Version)"
-          echo "deb=$deb" >> "$GITHUB_OUTPUT"
+          mapfile -t debs < <(ls dist/*.deb)
+          test "${#debs[@]}" -eq 4
+          version="$(dpkg-deb -f "${debs[0]}" Version)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "### собрано: \`$(basename "$deb")\` ($(du -h "$deb" | cut -f1))" >> "$GITHUB_STEP_SUMMARY"
-          dpkg-deb --info "$deb" | sed -n '1,25p' >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "### собрано 4 пакета, версия \`$version\`"
+            echo
+            for deb in "${debs[@]}"; do
+              echo "- \`$(basename "$deb")\` ($(du -h "$deb" | cut -f1))"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+          for deb in "${debs[@]}"; do
+            dpkg-deb --info "$deb" | sed -n '1,12p' >> "$GITHUB_STEP_SUMMARY"
+          done
 
       - name: Inspect package contents
         run: |
           set -euo pipefail
-          deb="$(ls dist/*.deb)"
-          listing="$(mktemp)"
-          dpkg-deb --contents "$deb" > "$listing"
-          sed 's/^/  /' "$listing"
-
-          required="
-          ./usr/bin/silero-tts-reader
-          ./usr/share/applications/silero-tts-reader.desktop
-          ./usr/share/icons/hicolor/256x256/apps/silero-tts-reader.png
-          ./usr/share/pixmaps/silero-tts-reader.png
-          ./usr/lib/silero-tts-reader/run.py
-          ./usr/lib/silero-tts-reader/silero_tts_reader/app.py
-          ./usr/lib/silero-tts-reader/silero_tts_reader/ui/playback_widget.py
-          ./usr/lib/systemd/user/silero-tts-reader.service
-          ./usr/share/doc/silero-tts-reader/copyright
-          "
-          # Сравнение по последнему полю строки листинга: путь не должен быть
-          # подстрокой другого (…silero-tts-reader и …silero-tts-reader.desktop).
-          # Пайплайн с «grep -q» здесь не годится: он закрывает поток раньше,
-          # dpkg-deb получает SIGPIPE, и с pipefail шаг ложно падает.
-          missing=0
-          for path in $required; do
-            if awk -v p="$path" '$NF == p { found = 1 } END { exit(found ? 0 : 1) }' "$listing"; then
-              echo "  ✓ $path"
-            else
-              echo "  ✗ нет в пакете: $path"
+          check() {   # пакет, затем список обязательных путей построчно
+            local deb="$1"; shift
+            local listing; listing="$(mktemp)"
+            dpkg-deb --contents "$deb" > "$listing"
+            echo "── $(basename "$deb")"
+            sed 's/^/  /' "$listing"
+            local missing=0
+            # Сравнение по последнему полю строки листинга: путь не должен быть
+            # подстрокой другого (…silero-tts и …silero-tts.desktop).
+            # Пайплайн с «grep -q» здесь не годится: он закрывает поток раньше,
+            # dpkg-deb получает SIGPIPE, и с pipefail шаг ложно падает.
+            for path in "$@"; do
+              if awk -v p="$path" '$NF == p { found = 1 } END { exit(found ? 0 : 1) }' "$listing"; then
+                echo "  ✓ $path"
+              else
+                echo "  ✗ нет в пакете: $path"
+                missing=$((missing + 1))
+              fi
+            done
+            # байткод и кеши в пакет попадать не должны
+            if grep -qE '__pycache__|\.pyc' "$listing"; then
+              echo "  ✗ в пакете есть __pycache__/.pyc"
               missing=$((missing + 1))
             fi
-          done
-          # байткод и кеши в пакет попадать не должны
-          if grep -qE '__pycache__|\.pyc' "$listing"; then
-            echo "  ✗ в пакете есть __pycache__/.pyc"
-            missing=$((missing + 1))
-          else
-            echo "  ✓ байткода в пакете нет"
+            rm -f "$listing"
+            test "$missing" -eq 0
+          }
+
+          check dist/silero-tts-common_*.deb \
+            ./usr/lib/silero-tts/silero_tts_reader/__init__.py \
+            ./usr/lib/silero-tts/silero_tts_reader/config/config_manager.py \
+            ./usr/lib/silero-tts/silero_tts_reader/core/tts_engine.py \
+            ./usr/share/doc/silero-tts-common/copyright
+          check dist/silero-tts-reader_*.deb \
+            ./usr/bin/silero-tts-reader \
+            ./usr/share/applications/silero-tts-reader.desktop \
+            ./usr/share/icons/hicolor/256x256/apps/silero-tts-reader.png \
+            ./usr/share/pixmaps/silero-tts-reader.png \
+            ./usr/lib/silero-tts/run.py \
+            ./usr/lib/silero-tts/silero_tts_reader/app.py \
+            ./usr/lib/silero-tts/silero_tts_reader/ui/playback_widget.py \
+            ./usr/lib/systemd/user/silero-tts-reader.service
+          check dist/silero-tts-speechd_*.deb \
+            ./usr/bin/silero-tts-speak \
+            ./usr/bin/silero-tts-speechd \
+            ./usr/lib/silero-tts/silero_tts_reader/cli.py
+          check dist/speech-dispatcher-silero-tts_*.deb \
+            ./etc/speech-dispatcher/modules/silero-tts.conf \
+            ./usr/share/doc/speech-dispatcher-silero-tts/copyright
+          # общий код не должен повторяться в двух пакетах
+          if for deb in dist/*.deb; do dpkg-deb --contents "$deb" | awk '$NF ~ /^\.\// {print $NF}'; done \
+              | grep -v '/$' | sort | uniq -d | tee /dev/stderr | grep -q .; then
+            echo "✗ файл попал в два пакета"; exit 1
           fi
-          rm -f "$listing"
-          test "$missing" -eq 0
+          echo "  ✓ файлы пакетов не пересекаются"
 
       - name: Install into a clean system
         run: |
           set -euo pipefail
-          deb="$(ls dist/*.deb)"
+          common_deb="$(ls dist/silero-tts-common_*.deb)"
+          reader_deb="$(ls dist/silero-tts-reader_*.deb)"
+          speaker_deb="$(ls dist/silero-tts-speechd_*.deb)"
+          module_deb="$(ls dist/speech-dispatcher-silero-tts_*.deb)"
           # Ставим ровно то, что перечислено в Depends: если пакет добавит
           # зависимость, которой здесь нет, dpkg -i ниже упадёт.
           DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
             python3-gi gir1.2-glib-2.0 gir1.2-gtk-3.0 python3-numpy \
-            gir1.2-ayatanaappindicator3-0.1 rubberband-cli
+            gir1.2-ayatanaappindicator3-0.1 rubberband-cli speech-dispatcher
 
-          # Без --force-depends: пакет обязан ставиться на чистой системе,
-          # все его Depends должны быть доступны в архиве Ubuntu.
-          dpkg -i "$deb"
+          # Без --force-depends: пакеты обязаны ставиться на чистой системе,
+          # все их Depends должны быть доступны в архиве Ubuntu.
+          dpkg -i "$common_deb" "$reader_deb" "$speaker_deb" "$module_deb"
 
           test -x /usr/bin/silero-tts-reader
           bash -n /usr/bin/silero-tts-reader
+          test -x /usr/bin/silero-tts-speak
+          test -x /usr/bin/silero-tts-speechd
+          test -f /etc/speech-dispatcher/modules/silero-tts.conf
 
           # Зависимости трея и управления скоростью должны быть рабочими
           python3 - <<'PY'
@@ -140,20 +171,26 @@ jobs:
 
           # Проверка установленного дерева, а не рабочей копии: каталог сменён,
           # иначе sys.path[0] = каталог репозитория и импорт берёт исходники.
-          ( cd / && PYTHONPATH=/usr/lib/silero-tts-reader python3 - <<'PY'
+          ( cd / && PYTHONPATH=/usr/lib/silero-tts python3 - <<'PY'
           import pathlib
           import silero_tts_reader
           from silero_tts_reader.ui import theme_manager, tray_icon
+          from silero_tts_reader.core import tts_engine
+          from silero_tts_reader import cli
           print("  ✓ модули импортируются из установленного дерева:", theme_manager.__file__)
-          assert theme_manager.__file__.startswith("/usr/lib/silero-tts-reader/"), theme_manager.__file__
+          for module in (theme_manager, tts_engine, cli):
+              assert module.__file__.startswith("/usr/lib/silero-tts/"), module.__file__
           for path in (
               "/usr/bin/silero-tts-reader",
+              "/usr/bin/silero-tts-speak",
+              "/usr/bin/silero-tts-speechd",
               "/usr/share/applications/silero-tts-reader.desktop",
               "/usr/share/icons/hicolor/128x128/apps/silero-tts-reader.png",
               "/usr/lib/systemd/user/silero-tts-reader.service",
+              "/etc/speech-dispatcher/modules/silero-tts.conf",
           ):
               assert pathlib.Path(path).exists(), path
-          print("  ✓ файлы пакета на своих местах")
+          print("  ✓ файлы пакетов на своих местах")
           PY
           )
 
@@ -177,8 +214,56 @@ jobs:
           printf '%s' "$out" | grep -q "sounddevice"
           echo "  ✓ запускатор сообщает об отсутствующих модулях и подсказывает установку"
 
-          dpkg -r silero-tts-reader
+          # ── speech-dispatcher ────────────────────────────────────────────────
+          silero-tts-speechd status >/dev/null 2>&1 && {
+            echo "модуль не должен быть включён сразу после установки"; exit 1; }
+          silero-tts-speechd enable
+          grep -qx 'AddModule "silero-tts" "sd_generic" "silero-tts.conf"' \
+            /etc/speech-dispatcher/speechd.conf
+          test "$(grep -c 'AddModule "silero-tts"' /etc/speech-dispatcher/speechd.conf)" -eq 1
+          silero-tts-speechd enable        # повторный запуск ничего не дублирует
+          test "$(grep -c 'AddModule "silero-tts"' /etc/speech-dispatcher/speechd.conf)" -eq 1
+          silero-tts-speechd status
+          echo "  ✓ модуль включается идемпотентно"
+
+          # Демон должен разобрать конфиг модуля без ошибок. Звука в контейнере
+          # нет, поэтому проверяем именно загрузку модуля по его логу.
+          rm -rf /root/.cache/speech-dispatcher
+          pkill -f speech-dispatcher || true
+          timeout 8 speech-dispatcher -s -l 4 >/dev/null 2>&1 || true
+          log=/root/.cache/speech-dispatcher/log/speech-dispatcher.log
+          test -f "$log"
+          grep -q "Module silero-tts loaded" "$log"
+          if grep -qiE "unknown config-option|can't open|failed to read" \
+              /root/.cache/speech-dispatcher/log/silero-tts.log 2>/dev/null; then
+            echo "ошибки разбора конфига модуля:"; cat /root/.cache/speech-dispatcher/log/silero-tts.log; exit 1
+          fi
+          grep -i silero "$log" | sed 's/^/    /'
+          echo "  ✓ speech-dispatcher загружает модуль silero-tts"
+
+          silero-tts-speechd disable
+          test "$(grep -c 'AddModule "silero-tts"' /etc/speech-dispatcher/speechd.conf || true)" -eq 0
+          echo "  ✓ модуль отключается без следов в speechd.conf"
+
+          # CLI обязан объяснить отсутствие torch, а не падать трассировкой
+          set +e
+          out="$(silero-tts-speak "проверка" 2>&1)"
+          rc=$?
+          set -e
+          printf '%s\n' "$out" | sed 's/^/    /'
+          test "$rc" -eq 1
+          printf '%s' "$out" | grep -q "torch"
+
+          # Удаляем в обратном порядке зависимостей. Байткод выше создали мы сами
+          # (импорт из установленного дерева), он не принадлежит пакетам — без
+          # чистки dpkg не сможет убрать общие каталоги.
+          find /usr/lib/silero-tts -name '__pycache__' -type d -prune -exec rm -rf {} +
+          dpkg -r speech-dispatcher-silero-tts silero-tts-speechd silero-tts-reader silero-tts-common
           test ! -e /usr/bin/silero-tts-reader
+          test ! -e /usr/bin/silero-tts-speak
+          test ! -e /usr/bin/silero-tts-speechd
+          test ! -e /usr/lib/silero-tts/silero_tts_reader
+          echo "  ✓ все четыре пакета удаляются"
 
       - name: Upload artifact
         if: ${{ !env.ACT }}

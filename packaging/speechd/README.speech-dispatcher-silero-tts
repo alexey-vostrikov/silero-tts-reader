@@ -1,0 +1,29 @@
+Модуль Silero TTS для speech-dispatcher
+=======================================
+
+Пакет ставит только конфигурацию модуля:
+
+    /etc/speech-dispatcher/modules/silero-tts.conf
+
+Это conffile: пользовательские правки сохраняются при обновлении пакета.
+Собственного бинарника у модуля нет — используется штатный плагин sd_generic, а
+синтез и воспроизведение выполняет /usr/bin/silero-tts-speak из пакета
+silero-tts-speechd (он в зависимостях).
+
+Включить модуль (добавляет AddModule в speechd.conf):
+
+    sudo silero-tts-speechd enable
+
+Проверить:
+
+    spd-say -O                        # ищем silero-tts в списке модулей
+    spd-say -m silero-tts -l ru "Проверка синтеза"
+    spd-say -m silero-tts -y MALE1 -l ru "Голос aidar"
+
+Голоса: FEMALE1 xenia, FEMALE2 baya, FEMALE3 kseniya, MALE1 aidar,
+MALE2 eugene, MALE3 random.
+
+Модуль по умолчанию для всех клиентов: строка DefaultModule silero-tts в
+/etc/speech-dispatcher/speechd.conf.
+
+Отключить: sudo silero-tts-speechd disable.

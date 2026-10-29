@@ -1,0 +1,41 @@
+Silero TTS из командной строки и управление модулем speech-dispatcher
+=====================================================================
+
+Пакет silero-tts-speechd ставит две команды.
+
+1. silero-tts-speak — синтез и воспроизведение текста:
+
+    silero-tts-speak "привет, мир"
+    silero-tts-speak --voice aidar --rate 1.25 "другой голос и темп"
+    silero-tts-speak --wav-out /tmp/out.wav "только файл, без звука"
+    echo "текст" | silero-tts-speak -
+
+Нужны torch, sounddevice и модель Silero v5 (~/.local/share/silero-tts-reader/
+v5_ru.pt). Если чего-то нет, команда завершается кодом 1 и пишет в stderr, чего
+именно не хватает — это же сообщение попадает в лог speech-dispatcher.
+
+2. silero-tts-speechd — управление модулем speech-dispatcher:
+
+    silero-tts-speechd status     # подключён ли модуль
+    sudo silero-tts-speechd enable
+    sudo silero-tts-speechd disable
+
+enable добавляет в /etc/speech-dispatcher/speechd.conf блок с маркерами и строкой
+
+    AddModule "silero-tts" "sd_generic" "silero-tts.conf"
+
+рядом остаётся резервная копия speechd.conf.bak-silero. Повторный enable ничего
+не дублирует, disable убирает ровно добавленный блок.
+
+Сама конфигурация модуля приходит из пакета speech-dispatcher-silero-tts. Без
+него enable сообщит, что конфиг модуля отсутствует.
+
+Проверка после включения:
+
+    spd-say -O                              # в списке должен быть silero-tts
+    spd-say -m silero-tts -l ru "Проверка"
+    spd-say -m silero-tts -y FEMALE2 -l ru "Голос baya"
+
+Сделать модуль основным: DefaultModule silero-tts в speechd.conf.
+
+Темп и высота тона не передаются: модель Silero v5 их не поддерживает.
