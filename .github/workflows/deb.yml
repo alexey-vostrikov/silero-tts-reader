@@ -228,15 +228,25 @@ jobs:
 
           # Демон должен разобрать конфиг модуля без ошибок. Звука в контейнере
           # нет, поэтому проверяем именно загрузку модуля по его логу.
+          # Каталог логов берём детерминированным: speech-dispatcher уважает
+          # XDG_CACHE_HOME, а раннер GitHub его выставляет — тогда лог уходит
+          # мимо /root/.cache и проверка падала бы молча.
           rm -rf /root/.cache/speech-dispatcher
-          pkill -f speech-dispatcher || true
-          timeout 8 speech-dispatcher -s -l 4 >/dev/null 2>&1 || true
+          pkill -f 'speech-dispatcher' 2>/dev/null || true
+          set +e
+          env -u XDG_CACHE_HOME HOME=/root timeout 8 speech-dispatcher -l 4 >/tmp/speechd.out 2>&1
+          set -e
           log=/root/.cache/speech-dispatcher/log/speech-dispatcher.log
-          test -f "$log"
-          grep -q "Module silero-tts loaded" "$log"
+          if [ ! -f "$log" ] || ! grep -q "Module silero-tts loaded" "$log"; then
+            echo "демон не подтвердил загрузку модуля"
+            echo "--- stdout демона ---"; sed 's/^/    /' /tmp/speechd.out
+            echo "--- найденные логи ---"; find /root/.cache "$XDG_CACHE_HOME" -name '*.log' 2>/dev/null | sed 's/^/    /'
+            exit 1
+          fi
           if grep -qiE "unknown config-option|can't open|failed to read" \
               /root/.cache/speech-dispatcher/log/silero-tts.log 2>/dev/null; then
-            echo "ошибки разбора конфига модуля:"; cat /root/.cache/speech-dispatcher/log/silero-tts.log; exit 1
+            echo "ошибки разбора конфига модуля:"
+            cat /root/.cache/speech-dispatcher/log/silero-tts.log; exit 1
           fi
           grep -i silero "$log" | sed 's/^/    /'
           echo "  ✓ speech-dispatcher загружает модуль silero-tts"
