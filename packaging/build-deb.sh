@@ -155,7 +155,7 @@ find "$COMMON_ROOT$APP_ROOT" -name '*.py[co]' -delete
 add_docs "$COMMON_ROOT" "$COMMON"
 
 build_pkg "$COMMON" "$COMMON_ROOT" <<CONTROL
-Depends: python3 (>= 3.10), python3-numpy
+Depends: python3 (>= 3.10), python3-numpy, python3-scipy
 Recommends: python3-sounddevice, python3-torch, python3-pynput
 Suggests: python3-pyrubberband
 Description: Silero TTS shared settings, configuration and synthesis engine
@@ -187,13 +187,17 @@ cat > "$READER_ROOT/usr/bin/$READER" <<LAUNCHER
 # PyGObject (gi) ставится системным пакетом, поэтому venv здесь не нужен и вреден.
 set -e
 APP_DIR="$APP_ROOT"
+# Системный интерпретатор: пакет зависит от python3-* из архива Ubuntu.
+# PATH-зависимый python3 может оказаться venv или инструментом разработчика,
+# где нет ни gi, ни torch.
+PYTHON="\${SILERO_TTS_PYTHON:-/usr/bin/python3}"
 
 if [ ! -f "\$APP_DIR/run.py" ]; then
     echo "silero-tts-reader: не найден \$APP_DIR/run.py — пакет установлен неполностью" >&2
     exit 1
 fi
 
-if ! python3 -c "import gi" 2>/dev/null; then
+if ! "\$PYTHON" -c "import gi" 2>/dev/null; then
     echo "silero-tts-reader: не установлен PyGObject." >&2
     echo "  sudo apt install python3-gi gir1.2-gtk-3.0" >&2
     exit 1
@@ -202,7 +206,7 @@ fi
 # torch и sounddevice в Ubuntu 26.04 есть как python3-torch/python3-sounddevice,
 # но они в Recommends: проверяем заранее и подсказываем apt, вместо падения
 # трассировкой внутри приложения.
-MISSING="\$(python3 - <<'PY' 2>/dev/null
+MISSING="\$("\$PYTHON" - <<'PY' 2>/dev/null
 import importlib.util as u
 mods = [m for m in ("numpy", "sounddevice", "torch") if u.find_spec(m) is None]
 print(" ".join(mods))
@@ -215,7 +219,7 @@ if [ -n "\$MISSING" ]; then
     exit 1
 fi
 
-exec python3 "\$APP_DIR/run.py" "\$@"
+exec "\$PYTHON" "\$APP_DIR/run.py" "\$@"
 LAUNCHER
 chmod 0755 "$READER_ROOT/usr/bin/$READER"
 
@@ -276,11 +280,12 @@ cat > "$SPEAKER_ROOT/usr/bin/silero-tts-speak" <<SPEAKER_BIN
 #!/bin/sh
 # Синтез речи из командной строки; вызывается модулем speech-dispatcher.
 APP_DIR="$APP_ROOT"
+PYTHON="\${SILERO_TTS_PYTHON:-/usr/bin/python3}"
 if [ ! -f "\$APP_DIR/silero_tts_reader/cli.py" ]; then
     echo "silero-tts-speak: не найден код в \$APP_DIR (пакет silero-tts-speechd)" >&2
     exit 1
 fi
-PYTHONPATH="\$APP_DIR\${PYTHONPATH:+:\$PYTHONPATH}" exec python3 -m silero_tts_reader.cli "\$@"
+PYTHONPATH="\$APP_DIR\${PYTHONPATH:+:\$PYTHONPATH}" exec "\$PYTHON" -m silero_tts_reader.cli "\$@"
 SPEAKER_BIN
 chmod 0755 "$SPEAKER_ROOT/usr/bin/silero-tts-speak"
 
