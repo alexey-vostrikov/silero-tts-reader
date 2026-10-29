@@ -33,8 +33,8 @@ enable добавляет в /etc/speech-dispatcher/speechd.conf блок с м�
 Проверка после включения:
 
     spd-say -O                              # в списке должен быть silero-tts
-    spd-say -m silero-tts -l ru "Проверка"
-    spd-say -m silero-tts -y FEMALE2 -l ru "Голос baya"
+    spd-say -o silero-tts -l ru "Проверка"
+    spd-say -o silero-tts -y FEMALE2 -l ru "Голос baya"
 
 Сделать модуль основным: DefaultModule silero-tts в speechd.conf.
 

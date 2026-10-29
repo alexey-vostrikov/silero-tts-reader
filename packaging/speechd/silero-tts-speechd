@@ -91,7 +91,7 @@ def cmd_enable() -> int:
     print(f"готово: модуль подключён ({SPEECHD_CONF})")
     print("резервная копия:", BACKUP)
     print("проверка: spd-say -O | grep silero-tts")
-    print("сказать:  spd-say -m silero-tts -l ru \"Проверка синтеза\"")
+    print("сказать:  spd-say -o silero-tts -l ru \"Проверка синтеза\"")
     return 0
 
 

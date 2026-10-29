@@ -17,8 +17,8 @@ silero-tts-speechd (он в зависимостях).
 Проверить:
 
     spd-say -O                        # ищем silero-tts в списке модулей
-    spd-say -m silero-tts -l ru "Проверка синтеза"
-    spd-say -m silero-tts -y MALE1 -l ru "Голос aidar"
+    spd-say -o silero-tts -l ru "Проверка синтеза"
+    spd-say -o silero-tts -y MALE1 -l ru "Голос aidar"
 
 Голоса: FEMALE1 xenia, FEMALE2 baya, FEMALE3 kseniya, MALE1 aidar,
 MALE2 eugene, MALE3 random.

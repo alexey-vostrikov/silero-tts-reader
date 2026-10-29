@@ -209,8 +209,8 @@ sudo apt install ./dist/silero-tts-common_*.deb ./dist/silero-tts-reader_*.deb \
 sudo silero-tts-speechd enable     # добавить AddModule в speechd.conf (идемпотентно, с бэкапом)
 silero-tts-speechd status          # подключён ли модуль
 spd-say -O                         # в списке появится silero-tts
-spd-say -m silero-tts -l ru "Проверка синтеза"
-spd-say -m silero-tts -y FEMALE2 -l ru "Голос baya"
+spd-say -o silero-tts -l ru "Проверка синтеза"
+spd-say -o silero-tts -y FEMALE2 -l ru "Голос baya"
 sudo silero-tts-speechd disable    # убрать ровно добавленный блок
 ```
 
