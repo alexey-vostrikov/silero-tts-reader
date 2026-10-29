@@ -13,7 +13,12 @@ try:
 except ImportError:
     HAS_EVDEV = False
 
-from pynput import keyboard as pynput_keyboard
+try:
+    from pynput import keyboard as pynput_keyboard
+    HAS_PYNPUT = True
+except ImportError:          # python3-pynput не установлен
+    pynput_keyboard = None
+    HAS_PYNPUT = False
 
 
 _MODIFIERS = {
@@ -263,18 +268,21 @@ class EvdevHotkeyListener(threading.Thread):
 class PynputHotkeyListener:
     def __init__(self) -> None:
         self._listener: pynput_keyboard.Listener | None = None
-        self._hotkeys: dict[tuple[dict[str, bool], str], Callable[[], None]] = {}
+        # Список, а не словарь: ключ хоткея содержит dict модификаторов,
+        # а dict нехешируем — в словаре он падал с TypeError.
+        self._hotkeys: list[tuple[dict[str, bool], str, Callable[[], None]]] = []
         self._held_keys: set[str] = set()
         self._dirty_single_modifiers: set[str] = set()
         self._lock = threading.Lock()
 
     def set_hotkeys(self, hotkey_map: dict[str, Callable[[], None]]) -> None:
         self.stop_listening()
-        new_hotkeys = {}
+        new_hotkeys: list[tuple[dict[str, bool], str, Callable[[], None]]] = []
         for hk_str, cb in hotkey_map.items():
             parsed = self._parse_pynput_hotkey(hk_str)
             if parsed:
-                new_hotkeys[parsed] = cb
+                req_mods, trigger = parsed
+                new_hotkeys.append((req_mods, trigger, cb))
 
         with self._lock:
             self._hotkeys = new_hotkeys
@@ -310,7 +318,9 @@ class PynputHotkeyListener:
             else:
                 trigger = part
 
-        if trigger is None:
+        if not trigger:
+            # Пустая строка (или «+» без клавиши) — это не хоткей: раньше
+            # возвращался триггер "" и в список попадал нерабочий хоткей.
             return None
         return req_mods, trigger
 
@@ -347,9 +357,9 @@ class PynputHotkeyListener:
 
             self._held_keys.add(key_name)
             held_copy = set(self._held_keys)
-            hotkeys_copy = dict(self._hotkeys)
+            hotkeys_copy = list(self._hotkeys)
 
-        for (req_mods, trigger), callback in hotkeys_copy.items():
+        for req_mods, trigger, callback in hotkeys_copy:
             is_single_mod = (trigger in mods and req_mods[trigger] and sum(req_mods.values()) == 1)
             if is_single_mod:
                 continue
@@ -396,7 +406,7 @@ class PynputHotkeyListener:
         with self._lock:
             if key_name in mods:
                 if key_name not in self._dirty_single_modifiers and self._held_keys == {key_name}:
-                    for (req_mods, trigger), callback in self._hotkeys.items():
+                    for req_mods, trigger, callback in self._hotkeys:
                         if trigger == key_name and req_mods[key_name] and sum(req_mods.values()) == 1:
                             threading.Thread(target=callback, daemon=True).start()
 
@@ -444,6 +454,16 @@ class HotkeyListener:
             self._evdev_listener.set_hotkeys(hotkey_map)
             if not self._evdev_listener.is_alive():
                 self._evdev_listener.start()
+        elif not HAS_PYNPUT:
+            self._backend = "none"
+            print(
+                "  ✗ Горячие клавиши недоступны: нет ни evdev (нужны права на /dev/input/), "
+                "ни pynput.\n"
+                "    sudo apt install python3-pynput   # X11\n"
+                "    sudo usermod -aG input $USER      # Wayland, затем перелогиниться",
+                flush=True,
+            )
+            return
         else:
             self._backend = "pynput"
             print("  ⚠ evdev не доступен (требуются права доступа к /dev/input/). Использование pynput (X11 fallback)...", flush=True)

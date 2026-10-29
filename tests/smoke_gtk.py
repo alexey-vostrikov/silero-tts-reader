@@ -96,6 +96,7 @@ from silero_tts_reader.ui.settings_window import (  # noqa: E402
 )
 from silero_tts_reader.ui.theme_manager import ThemeManager, rgba, shift_color  # noqa: E402
 from silero_tts_reader.ui.tray_icon import TrayIcon  # noqa: E402
+from silero_tts_reader.ui import tray_icon as tray_module  # noqa: E402
 
 ok = 0
 fail = 0
@@ -236,9 +237,27 @@ check("в меню 4 пункта + 2 разделителя", len(items) == 6, 
 saved_env = {k: os.environ.get(k) for k in ("WAYLAND_DISPLAY", "XDG_SESSION_TYPE")}
 os.environ.pop("WAYLAND_DISPLAY", None)
 os.environ["XDG_SESSION_TYPE"] = "x11"
+
+# Основной путь — AppIndicator: он работает и на X11, и на Wayland, поэтому
+# при наличии typelib и иконки выбирается первым.
+check("иконка приложения найдена (репозиторий или установленный пакет)",
+      tray_module.icon_path() != "", repr(tray_module.icon_path()))
 tray_x11 = TrayIcon(lambda: None, lambda: None, lambda: None, lambda: None)
-check("X11: трей поднялся через Gtk.StatusIcon", tray_x11.available is True and tray_x11._status_icon is not None,
+check("X11: трей поднялся", tray_x11.available is True,
       f"indicator={tray_x11._indicator is not None}, status={tray_x11._status_icon is not None}")
+
+# Ветка без AppIndicator: подменяем typelib на None — должен включиться
+# Gtk.StatusIcon. Без подмены эта ветка не проверяется на машине, где
+# gir1.2-ayatanaappindicator3-0.1 установлен.
+saved_indicator = tray_module._AppIndicator
+tray_module._AppIndicator = None
+try:
+    tray_fallback = TrayIcon(lambda: None, lambda: None, lambda: None, lambda: None)
+finally:
+    tray_module._AppIndicator = saved_indicator
+check("X11 без AppIndicator: трей поднялся через Gtk.StatusIcon",
+      tray_fallback.available is True and tray_fallback._status_icon is not None,
+      f"indicator={tray_fallback._indicator is not None}, status={tray_fallback._status_icon is not None}")
 
 os.environ["WAYLAND_DISPLAY"] = "wayland-0"
 os.environ["XDG_SESSION_TYPE"] = "wayland"
