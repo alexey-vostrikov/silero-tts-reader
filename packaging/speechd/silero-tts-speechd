@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""Включение и выключение модуля Silero TTS в speech-dispatcher.
+
+    silero-tts-speechd status     # подключён ли модуль
+    silero-tts-speechd enable     # добавить строку AddModule (нужен root)
+    silero-tts-speechd disable    # убрать её (нужен root)
+
+Правка /etc/speech-dispatcher/speechd.conf делается одним блоком с маркерами,
+поэтому повторный запуск ничего не дублирует, а `disable` убирает ровно то, что
+добавил `enable`. Рядом остаётся резервная копия speechd.conf.bak-silero.
+"""
+from __future__ import annotations
+
+import os
+import re
+import shutil
+import sys
+
+SPEECHD_CONF = "/etc/speech-dispatcher/speechd.conf"
+MODULE_CONF = "/etc/speech-dispatcher/modules/silero-tts.conf"
+BACKUP = SPEECHD_CONF + ".bak-silero"
+
+ADD_LINE = 'AddModule "silero-tts" "sd_generic" "silero-tts.conf"'
+BEGIN = "# >>> silero-tts (managed by silero-tts-speechd) >>>"
+END = "# <<< silero-tts <<<"
+BLOCK = f"{BEGIN}\n{ADD_LINE}\n{END}\n"
+
+ANCHOR_RE = re.compile(r"(?m)^#AddModule \"voxin\"[^\n]*$")
+
+
+def die(message: str, code: int = 1) -> int:
+    print(f"silero-tts-speechd: {message}", file=sys.stderr)
+    return code
+
+
+def read_conf() -> str:
+    try:
+        with open(SPEECHD_CONF, encoding="utf-8") as handle:
+            return handle.read()
+    except OSError as exc:
+        raise SystemExit(die(f"не читается {SPEECHD_CONF}: {exc}"))
+
+
+def is_enabled(text: str) -> bool:
+    return BEGIN in text or re.search(rf"(?m)^{re.escape(ADD_LINE)}$", text) is not None
+
+
+def write_conf(text: str) -> None:
+    if not os.access(SPEECHD_CONF, os.W_OK):
+        raise SystemExit(die("нет прав на запись — запустите через sudo"))
+    if not os.path.exists(BACKUP):
+        shutil.copy2(SPEECHD_CONF, BACKUP)
+    tmp = SPEECHD_CONF + ".tmp-silero"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    os.replace(tmp, SPEECHD_CONF)
+
+
+def cmd_status() -> int:
+    text = read_conf()
+    enabled = is_enabled(text)
+    print(f"конфиг модуля: {MODULE_CONF} — {'есть' if os.path.exists(MODULE_CONF) else 'ОТСУТСТВУЕТ'}")
+    print(f"speechd.conf:  {'модуль подключён' if enabled else 'модуль НЕ подключён'}")
+    if enabled:
+        print("проверка: spd-say -O | grep silero-tts")
+    else:
+        print("включить:  sudo silero-tts-speechd enable")
+    return 0 if enabled else 1
+
+
+def cmd_enable() -> int:
+    text = read_conf()
+    if BEGIN in text:
+        print("уже включено — ничего не меняю")
+        return 0
+    if re.search(rf"(?m)^{re.escape(ADD_LINE)}$", text):
+        print("строка AddModule уже есть в конфиге (добавлена вручную) — не дублирую")
+        return 0
+
+    anchor = ANCHOR_RE.search(text)
+    if anchor:
+        text = text[: anchor.end()] + "\n" + BLOCK + text[anchor.end():]
+    else:
+        # якоря нет — ставим в конец раздела модулей, перед клиентской секцией
+        marker = text.find("# -----CLIENT SPECIFIC CONFIGURATION-----")
+        if marker == -1:
+            return die("не нашёл, куда вставить AddModule — добавьте строку вручную:\n  " + ADD_LINE)
+        text = text[:marker] + BLOCK + "\n" + text[marker:]
+
+    write_conf(text)
+    print(f"готово: модуль подключён ({SPEECHD_CONF})")
+    print("резервная копия:", BACKUP)
+    print("проверка: spd-say -O | grep silero-tts")
+    print("сказать:  spd-say -m silero-tts -l ru \"Проверка синтеза\"")
+    return 0
+
+
+def cmd_disable() -> int:
+    text = read_conf()
+    if BEGIN not in text:
+        print("блок silero-tts в конфиге не найден — выключать нечего")
+        return 0
+    text = re.sub(
+        rf"(?ms)^{re.escape(BEGIN)}\n.*?^{re.escape(END)}\n?",
+        "",
+        text,
+        count=1,
+    )
+    write_conf(text)
+    print("модуль отключён")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    command = argv[1] if len(argv) > 1 else "status"
+    actions = {"status": cmd_status, "enable": cmd_enable, "disable": cmd_disable}
+    if command in ("-h", "--help", "help"):
+        print(__doc__.strip())
+        return 0
+    if command not in actions:
+        return die(f"неизвестная команда: {command} (status|enable|disable)")
+    return actions[command]()
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

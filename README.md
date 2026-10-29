@@ -136,41 +136,92 @@ pip install -r requirements.txt pyrubberband
 Пакет собирается без `debhelper` — достаточно `dpkg-deb` и `python3-pil` (для иконок):
 
 ```bash
-./packaging/build-deb.sh          # результат: dist/silero-tts-reader_<версия>_all.deb
+./packaging/build-deb.sh          # результат: четыре .deb в dist/
 VERSION=2.0.0 ./packaging/build-deb.sh   # версию можно задать явно
 ```
+
+Пакетов четыре — раскладка по назначению:
+
+| Пакет | Что внутри |
+|---|---|
+| `silero-tts-common` | настройки и конфиги: `config_manager`, движок синтеза, обработка текста (`/usr/lib/silero-tts/silero_tts_reader/{config,core}`) |
+| `silero-tts-reader` | GTK-приложение: `/usr/bin/silero-tts-reader`, `.desktop`, иконки, user-unit |
+| `silero-tts-speechd` | командная строка: `/usr/bin/silero-tts-speak` и `/usr/bin/silero-tts-speechd` |
+| `speech-dispatcher-silero-tts` | конфигурация модуля `/etc/speech-dispatcher/modules/silero-tts.conf` |
+
+`silero-tts-common` держит общий код, остальные три зависят от него точной версией
+(`silero-tts-common (= <версия>)`), так что половинчатой установки не бывает.
 
 Версия пакета детерминирована: тег `v2.1.0` на HEAD даёт `2.1.0`, при коммитах после тега —
 `2.1.0+7.gabc1234`, без тегов вовсе — `<version из pyproject.toml>+gitabc1234`, а неубранные правки
 добавляют `.dirty`. Установка и удаление:
 
 ```bash
-sudo apt install ./dist/silero-tts-reader_*_all.deb   # зависимости подтянутся из архива
-sudo dpkg -r silero-tts-reader
+sudo apt install ./dist/silero-tts-common_*.deb ./dist/silero-tts-reader_*.deb \
+                 ./dist/silero-tts-speechd_*.deb ./dist/speech-dispatcher-silero-tts_*.deb
+sudo apt remove silero-tts-reader silero-tts-speechd speech-dispatcher-silero-tts silero-tts-common
 ```
 
-Что ставится: код в `/usr/lib/silero-tts-reader`, запускатор `/usr/bin/silero-tts-reader`,
-`.desktop` в `/usr/share/applications`, иконки в теме `hicolor`, user-unit
-`/usr/lib/systemd/user/silero-tts-reader.service` (не включается автоматически).
+Что ставится: общий код в `/usr/lib/silero-tts`, запускаторы `/usr/bin/silero-tts-reader` и
+`/usr/bin/silero-tts-speak`, `.desktop` в `/usr/share/applications`, иконки в теме `hicolor`,
+user-unit `/usr/lib/systemd/user/silero-tts-reader.service` (не включается автоматически),
+конфигурация модуля speech-dispatcher.
 
-`Depends` пакета — только то, что реально есть в архиве Ubuntu: `python3-gi`, `gir1.2-gtk-3.0`,
-`python3-numpy`, а также `gir1.2-ayatanaappindicator3-0.1` (иконка в трее на Wayland) и
-`rubberband-cli` (изменение скорости). `torch` и `sounddevice` в архиве Ubuntu отсутствуют — они в
-`Recommends`, а запускатор проверяет их наличие и подсказывает команду установки:
+`Depends` пакета `silero-tts-reader` — только то, что реально есть в архиве Ubuntu: `python3-gi`,
+`gir1.2-gtk-3.0`, `gir1.2-ayatanaappindicator3-0.1` (иконка в трее на Wayland) и `rubberband-cli`
+(изменение скорости). Тяжёлые и необязательные для запуска `python3-torch` (движок синтеза, ~65 МБ в
+пакете, ~117 МБ на диске) и `python3-sounddevice` (вывод звука), а также `python3-pynput` и
+`python3-evdev` (глобальные хоткеи) — в `Recommends`: в Ubuntu 26.04 они есть в архиве, ставятся
+одной командой, а запускатор проверяет их наличие и подсказывает её:
 
 ```bash
-sudo apt install python3-pip
-python3 -m pip install --user --break-system-packages sounddevice torch
+sudo apt install python3-torch python3-sounddevice python3-pynput python3-evdev
 ```
 
-Сборка в CI — `.github/workflows/deb.yml`: на каждый push/PR собирается пакет, проверяется состав
-(`dpkg-deb --contents`), ставится на чистую систему (`dpkg -i` без `--force-depends`), сверяется, что
-GTK инициализируется и запускатор даёт внятное сообщение об отсутствующих pip-модулях; на тег `v*`
-пакет прикрепляется к релизу. Локальная отладка workflow — `act`:
+Сборка в CI — `.github/workflows/deb.yml`: обе джобы выполняются на `ubuntu-26.04`, а сборка идёт
+внутри контейнера `ubuntu:26.04` (целевой дистрибутив). На каждый push/PR собираются оба пакета,
+проверяется состав (`dpkg-deb --contents`), они ставятся на чистую систему (`dpkg -i` без
+`--force-depends`), сверяется, что GTK инициализируется, запускатор даёт внятное сообщение об
+отсутствующих pip-модулях, а `speech-dispatcher` загружает модуль `silero-tts`; на любой тег пакеты
+прикрепляются к релизу. Локальная отладка workflow — `act`:
 
 ```bash
-act -W .github/workflows/deb.yml -j deb     # конфигурация образов — в ~/.actrc
+act -W .github/workflows/deb.yml -j deb     # конфигурация образов — в .actrc
 ```
+
+## 🗣️ Интеграция со speech-dispatcher
+
+Отдельный пакет `speech-dispatcher-silero-tts` делает голоса Silero доступными любому клиенту
+speech-dispatcher: `spd-say`, Orca, режим чтения в Firefox, talkd-совместимые утилиты. Он собирается
+тем же скриптом (`dist/speech-dispatcher-silero-tts_<версия>_all.deb`) и зависит от
+`silero-tts-speechd` той же версии: конфигурация модуля и инструмент его включения разведены по
+пакетам, чтобы обновлять их независимо.
+
+Собственного C-модуля нет: используется штатный плагин `sd_generic`, а синтез и воспроизведение
+выполняет `/usr/bin/silero-tts-speak`. Конфигурация модуля
+`/etc/speech-dispatcher/modules/silero-tts.conf` лежит в `speech-dispatcher-silero-tts` (conffile),
+команда управления `silero-tts-speechd` — в одноимённом пакете:
+
+```bash
+sudo apt install ./dist/silero-tts-common_*.deb ./dist/silero-tts-reader_*.deb \
+                 ./dist/silero-tts-speechd_*.deb ./dist/speech-dispatcher-silero-tts_*.deb
+
+sudo silero-tts-speechd enable     # добавить AddModule в speechd.conf (идемпотентно, с бэкапом)
+silero-tts-speechd status          # подключён ли модуль
+spd-say -O                         # в списке появится silero-tts
+spd-say -m silero-tts -l ru "Проверка синтеза"
+spd-say -m silero-tts -y FEMALE2 -l ru "Голос baya"
+sudo silero-tts-speechd disable    # убрать ровно добавленный блок
+```
+
+Голоса: `FEMALE1` (xenia), `FEMALE2` (baya), `FEMALE3` (kseniya), `MALE1` (aidar), `MALE2` (eugene),
+`MALE3` (random). Модулем по умолчанию модуль становится после `DefaultModule silero-tts` в
+`speechd.conf`.
+
+Темп и высота тона не передаются: модель Silero v5 их не поддерживает, а целочисленный `$RATE`
+speech-dispatcher дал бы бессмысленную скорость. Ограничения прямые: без установленных `torch`,
+`sounddevice` и модели (`~/.local/share/silero-tts-reader/v5_ru.pt`) `silero-tts-speak` завершится
+кодом 1 с понятным сообщением, и speech-dispatcher напишет его в свой лог.
 
 ---
 
