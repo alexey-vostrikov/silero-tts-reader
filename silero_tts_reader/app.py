@@ -7,12 +7,14 @@
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import queue
 import signal
 import threading
 import traceback
-from typing import Callable, Optional
+from collections.abc import Callable
+from pathlib import Path
 
 # Подавить шум pynput/Xlib до любых импортов
 os.environ.setdefault("PYNPUT_BACKEND", "xorg")
@@ -20,26 +22,29 @@ os.environ.setdefault("PYNPUT_BACKEND", "xorg")
 import gi
 
 gi.require_version("Gio", "2.0")
-gi.require_version("Gtk", "3.0")
+gi.require_version("Gtk", "4.0")
 
 from gi.repository import Gio, GLib, Gtk  # noqa: E402
 
-from . import build_info, instance  # noqa: E402
+from . import build_info, i18n, instance  # noqa: E402
 from .config.config_manager import ConfigManager  # noqa: E402
-from . import i18n
-from .i18n import _
 from .core.audio_player import AudioPlayer  # noqa: E402
 from .core.hotkey_listener import HotkeyListener  # noqa: E402
 from .core.text_extractor import TextExtractor  # noqa: E402
 from .core.text_processor import TextProcessor  # noqa: E402,F401  (нужен для настроек)
 from .core.tts_engine import TTSEngine, TTSLoadError  # noqa: E402
 from .core.tts_worker import TTSWorker  # noqa: E402
+from .i18n import _  # noqa: E402
+from .ui import window_icon  # noqa: E402
 from .ui.playback_widget import PlaybackWidget  # noqa: E402
 from .ui.settings_window import SettingsWindow  # noqa: E402
+from .ui.sni_tray import MenuEntry, StatusNotifierTray  # noqa: E402
 from .ui.theme_manager import ThemeManager  # noqa: E402
-from .ui.tray_icon import TrayIcon, icon_path  # noqa: E402
+from .ui.window_icon import ICON_NAME, icon_file  # noqa: E402
 
-APP_ID = "ru.skala.silero-tts-reader"
+# Идентификатор приложения задан в ui/window_icon.py: он же используется как
+# имя .desktop-файла и WM_CLASS, иначе рабочий стол не находит иконку.
+APP_ID = window_icon.APP_ID
 
 # Сколько сегментов держим готовыми к воспроизведению. Ограничение даёт
 # обратное давление: синтез не убегает вперёд и не держит в памяти всю книгу
@@ -73,15 +78,15 @@ class Application(Gtk.Application):
         )
         self._hotkey_listener = HotkeyListener()
         self._stop_event = threading.Event()
-        self._player: Optional[AudioPlayer] = None
-        self._worker: Optional[TTSWorker] = None
+        self._player: AudioPlayer | None = None
+        self._worker: TTSWorker | None = None
         self._audio_queue: queue.Queue = queue.Queue(maxsize=AUDIO_QUEUE_SIZE)
 
-        self._theme_manager: Optional[ThemeManager] = None
-        self._widget: Optional[PlaybackWidget] = None
-        self._tray: Optional[TrayIcon] = None
-        self._settings_dialog: Optional[SettingsWindow] = None
-        self._position_timer: Optional[int] = None
+        self._theme_manager: ThemeManager | None = None
+        self._widget: PlaybackWidget | None = None
+        self._tray: StatusNotifierTray | None = None
+        self._settings_dialog: SettingsWindow | None = None
+        self._position_timer: int | None = None
 
     # ── Жизненный цикл ───────────────────────────────────────────────────────
 
@@ -109,7 +114,7 @@ class Application(Gtk.Application):
         instance.register(build_info.current())
 
         self._theme_manager = ThemeManager()
-        self._widget = PlaybackWidget()
+        self._widget = PlaybackWidget(application=self)
         self._widget.restore_position(*self._config.widget_position)
         self._wire_widget()
         # Окно привязываем к приложению: иначе действия app.* из меню не найдутся
@@ -122,17 +127,30 @@ class Application(Gtk.Application):
         self._theme_manager.set_mode(self._config.theme)
         self._update_widget_theme()
 
-        self._tray = TrayIcon(
-            on_speak_clipboard=self._on_speak_clipboard,
-            on_settings=self._open_settings,
-            on_about=self._show_about,
-            on_quit=self._quit,
+        # Значок в лотке — через StatusNotifierItem: в GTK4 Gtk.StatusIcon и
+        # Gtk.Menu удалены, а привязка AppIndicator собрана под GTK3.
+        self._tray = StatusNotifierTray(
+            icon_name=ICON_NAME,
+            title=APP_NAME,
+            on_activate=self._show_window,
         )
+        self._tray.set_entries([
+            MenuEntry(_("🔊  Показать окно"), self._show_window),
+            MenuEntry(_("📂  Открыть файл…"), self._open_file_dialog),
+            MenuEntry(separator=True),
+            MenuEntry(_("📋  Озвучить буфер обмена"), self._on_speak_clipboard),
+            MenuEntry(separator=True),
+            MenuEntry(_("⚙️  Настройки"), self._open_settings),
+            MenuEntry(_("ℹ️  О программе"), self._show_about),
+            MenuEntry(separator=True),
+            MenuEntry(_("✖  Выход"), self._quit),
+        ])
         self._tray.show()
         if not self._tray.available:
             print(_(
-                "  ⚠ Иконка в трее недоступна: нужен пакет gir1.2-ayatanaappindicator3-0.1\n"
-                "    и расширение AppIndicator в GNOME Shell. Сообщения идут уведомлениями."
+                "  ⚠ Иконка в трее недоступна: в системе нет службы значков\n"
+                "    (в GNOME это расширение AppIndicator Support). Сообщения идут\n"
+                "    уведомлениями, управление — из окна и с горячих клавиш."
             ), flush=True)
 
         print(
@@ -170,6 +188,7 @@ class Application(Gtk.Application):
         нельзя управлять вообще.
         """
         actions = {
+            "open-file": (self._open_file_dialog, ["<Control>o"]),
             "settings": (self._open_settings, ["<Control>comma"]),
             "about": (self._show_about, []),
             "quit": (self._quit, ["<Control>q"]),
@@ -190,6 +209,7 @@ class Application(Gtk.Application):
     def build_menu_model(self) -> Gio.Menu:
         """Меню для виджета: те же действия, что и клавиши."""
         menu = Gio.Menu()
+        menu.append(_("Открыть файл…"), "app.open-file")
         menu.append(_("Озвучить буфер обмена"), "app.speak-clipboard")
         menu.append(_("Озвучить выделенное"), "app.speak-selection")
         menu.append(_("Остановить"), "app.stop")
@@ -208,10 +228,80 @@ class Application(Gtk.Application):
         """Озвучить открытые файлы: аргумент командной строки или «Открыть с помощью»."""
         if not self._initialized:
             self.do_activate()
+        self._speak_paths([gfile.get_path() for gfile in files])
 
+    def _open_file_dialog(self) -> None:
+        """Выбрать файл или книгу через диалог и озвучить.
+
+        ``Gtk.FileChooserNative`` вместо FileChooserDialog: под Wayland окно
+        рисует портал, и оно не привязано к нашему окну (у виджета
+        ``skip_taskbar`` и прозрачность — обычный диалог поверх него выглядит
+        сломанным).
+        """
+        if not self._initialized:
+            self.do_activate()
+
+        chooser = Gtk.FileChooserNative.new(
+            _("Открыть файл для озвучки"),
+            self._widget,
+            Gtk.FileChooserAction.OPEN,
+            _("Озвучить"),
+            _("Отмена"),
+        )
+
+        # Фильтры: сначала книги (основной случай), затем текст, затем всё.
+        books = Gtk.FileFilter()
+        books.set_name(_("Книги FB2"))
+        for suffix in TextExtractor.BOOK_SUFFIXES:
+            books.add_pattern(f"*{suffix}")
+        chooser.add_filter(books)
+
+        texts = Gtk.FileFilter()
+        texts.set_name(_("Текстовые файлы"))
+        for suffix in TextExtractor.TEXT_SUFFIXES:
+            texts.add_pattern(f"*{suffix}")
+        chooser.add_filter(texts)
+
+        every = Gtk.FileFilter()
+        every.set_name(_("Все файлы"))
+        every.add_pattern("*")
+        chooser.add_filter(every)
+        chooser.set_filter(books)
+
+        # Папка из настроек: обычно книги лежат в одном месте.
+        last_dir = self._config.last_file_dir
+        if last_dir:
+            with contextlib.suppress(GLib.Error):
+                chooser.set_current_folder(last_dir)
+
+        def on_response(dialog, response):
+            path = None
+            if response == Gtk.ResponseType.ACCEPT:
+                gfile = dialog.get_file()
+                path = gfile.get_path() if gfile else None
+            dialog.destroy()
+            if path:
+                self._remember_dir(path)
+                self._speak_paths([path])
+
+        chooser.connect("response", on_response)
+        chooser.show()
+
+    def _remember_dir(self, path: str) -> None:
+        """Запомнить папку выбранного файла — в следующий раз диалог откроется в ней."""
+        parent = str(Path(path).expanduser().parent)
+        if self._config.last_file_dir == parent:
+            return
+        try:
+            self._config.last_file_dir = parent
+            self._config.save()
+        except (OSError, AttributeError):
+            pass  # настройка не критична: диалог просто откроется в домашней
+
+    def _speak_paths(self, paths: list[str | None]) -> None:
+        """Прочитать файлы и передать текст в синтез. Общий путь для всех входов."""
         texts: list[str] = []
-        for gfile in files:
-            path = gfile.get_path()
+        for path in paths:
             if not path:
                 self._notify(_("Не удалось открыть файл"))
                 continue
@@ -300,9 +390,22 @@ class Application(Gtk.Application):
 
     # ── Виджет воспроизведения ───────────────────────────────────────────────
 
+    def _show_window(self) -> None:
+        """Вернуть виджет на экран.
+
+        Виджет скрывается сам через ``schedule_hide``, и вернуть его можно
+        только явно: ``fade_in`` снимает таймер скрытия и показывает окно.
+        """
+        if not self._initialized:
+            self.do_activate()
+            return
+        if self._widget is not None:
+            self._widget.fade_in()
+
     def _wire_widget(self) -> None:
         assert self._widget is not None
         w = self._widget
+        w.on_open_file = self._open_file_dialog
         w.on_pause_resume = self._toggle_pause
         w.on_stop = self._stop_playback
         w.on_speed_changed = self._on_speed_changed
@@ -320,7 +423,8 @@ class Application(Gtk.Application):
     # ── Горячие клавиши ──────────────────────────────────────────────────────
 
     def _register_hotkeys(self) -> None:
-        try:
+        # Конфликт комбинаций разбирается в настройках, а не роняет запуск.
+        with contextlib.suppress(ValueError):
             self._hotkey_listener.set_hotkeys(
                 speak_selection=self._config.hotkey_speak_selection,
                 speak_clipboard=self._config.hotkey_speak_clipboard,
@@ -329,8 +433,6 @@ class Application(Gtk.Application):
                 on_speak_clipboard=lambda: self._ui(self._on_speak_clipboard),
                 on_stop=lambda: self._ui(self._stop_playback),
             )
-        except ValueError:
-            pass  # конфликт комбинаций — разбирается в настройках
 
     # ── Конвейер TTS ─────────────────────────────────────────────────────────
 
@@ -515,7 +617,7 @@ class Application(Gtk.Application):
         """Всплывающее уведомление: работает и без трея (Gio.Notification)."""
         notification = Gio.Notification.new(title)
         notification.set_body(message)
-        path = icon_path()
+        path = icon_file()
         if path:
             notification.set_icon(Gio.FileIcon.new(Gio.File.new_for_path(path)))
         else:
@@ -535,8 +637,9 @@ class Application(Gtk.Application):
         )
         dialog.set_title(_("Ошибка TTS"))
         dialog.format_secondary_text(error_text)
-        dialog.run()
-        dialog.destroy()
+        # В GTK4 у диалога нет run(): показываем и закрываем по ответу.
+        dialog.connect("response", lambda d, _r: d.destroy())
+        dialog.present()
 
     def _show_about(self) -> None:
         dialog = Gtk.AboutDialog(modal=True)
@@ -546,21 +649,22 @@ class Application(Gtk.Application):
             "Озвучивание выделенного текста с помощью Silero TTS.\n"
             "Горячие клавиши и голос настраиваются в Настройках."
         ))
-        path = icon_path()
+        path = icon_file()
         if path:
-            try:
+            with contextlib.suppress(Exception):
                 dialog.set_logo(GdkPixbuf_from_file(path))
-            except Exception:
-                pass
         dialog.run()
         dialog.destroy()
 
     # ── Позиция виджета ──────────────────────────────────────────────────────
 
     def _save_widget_position(self) -> bool:
-        if self._widget is not None and self._widget.get_visible():
-            x, y = self._widget.get_position()
-            self._config.widget_position = (x, y)
+        """Позиция не сохраняется: в GTK4 её нельзя ни узнать, ни задать.
+
+        Место окна выбирает композитор (через layer-shell) либо X-сервер по
+        нашей просьбе — прочитать его обратно нечем, а значит и запоминать
+        нечего. Настройка widget.position_* остаётся ради старых конфигов.
+        """
         return True  # повторяющийся таймер
 
     # ── Выход ────────────────────────────────────────────────────────────────

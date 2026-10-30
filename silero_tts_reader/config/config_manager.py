@@ -1,11 +1,10 @@
 """Configuration manager — loads and saves settings to ~/.config/silero-tts-reader/config.json."""
 import json
-import os
 from pathlib import Path
 from typing import Any
 
-from ..models import DEFAULT_LANG, MODELS, model_path as default_model_path
-
+from ..models import DEFAULT_LANG, MODELS
+from ..models import model_path as default_model_path
 
 CONFIG_DIR = Path.home() / ".config" / "silero-tts-reader"
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -48,15 +47,22 @@ DEFAULTS: dict[str, Any] = {
     },
     "playback": {
         "speed": 1.0,
-        # Пауза перед репликой диалога: без неё «Глава 1» и «- Ну Лёха…»
-        # сливаются в одну фразу.
+        # Пауза перед репликой диалога (строка с тире): без неё «Глава 1» и
+        # «- Ну Лёха…» сливаются в одну фразу.
         "pause_dialogue_ms": 700,
-        # Пауза между абзацами: граница абзаца должна слышаться.
+        # Пауза между названием главы и её телом.
+        "pause_heading_ms": 800,
+        # Пауза между абзацами внутри главы.
         "pause_paragraph_ms": 400,
     },
     "widget": {
         "position_x": -1,   # -1 = auto (bottom-right)
         "position_y": -1,
+    },
+    "files": {
+        # Папка последнего открытого файла: диалог открывается в ней, а не
+        # каждый раз в домашнем каталоге.
+        "last_dir": "",
     },
     "ui": {
         "theme": "system",  # "system", "dark", "light"
@@ -81,16 +87,24 @@ DEFAULTS: dict[str, Any] = {
 class ConfigManager:
     """Manages persistent application configuration."""
 
-    def __init__(self) -> None:
+    def __init__(self, path: Path | None = None) -> None:
+        """Прочитать настройки из файла.
+
+        ``path`` — для тестов и для запуска с другим профилем: без него
+        источник неотличим от боевого, и тест молча читает настройки того,
+        кто его запустил (так паузы в тестах оказывались пользовательскими
+        1000/1500/300 вместо заложенных в проверку).
+        """
+        self._path = Path(path) if path is not None else CONFIG_FILE
         self._data: dict[str, Any] = {}
         self._load()
 
     def _load(self) -> None:
         """Load config from disk, merging with defaults."""
         self._data = self._deep_merge(DEFAULTS, {})
-        if CONFIG_FILE.exists():
+        if self._path.exists():
             try:
-                with CONFIG_FILE.open("r", encoding="utf-8") as f:
+                with self._path.open("r", encoding="utf-8") as f:
                     saved = json.load(f)
                 self._data = self._deep_merge(DEFAULTS, saved)
                 self._migrate(saved)
@@ -127,8 +141,8 @@ class ConfigManager:
 
     def save(self) -> None:
         """Persist current config to disk."""
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        with CONFIG_FILE.open("w", encoding="utf-8") as f:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with self._path.open("w", encoding="utf-8") as f:
             json.dump(self._data, f, ensure_ascii=False, indent=2)
 
     def reset_to_defaults(self) -> None:
@@ -156,6 +170,14 @@ class ConfigManager:
         node[keys[-1]] = value
 
     # ── Convenience properties ────────────────────────────────────────────────
+
+    @property
+    def last_file_dir(self) -> str:
+        return self.get("files", "last_dir", default="")
+
+    @last_file_dir.setter
+    def last_file_dir(self, v: str) -> None:
+        self.set("files", "last_dir", v)
 
     @property
     def hotkey_speak_selection(self) -> str:
@@ -273,6 +295,15 @@ class ConfigManager:
     @pause_dialogue_ms.setter
     def pause_dialogue_ms(self, v: int) -> None:
         self.set("playback", "pause_dialogue_ms", max(0, min(5000, int(v))))
+
+    @property
+    def pause_heading_ms(self) -> int:
+        """Пауза между заголовком главы и её телом, мс."""
+        return int(self.get("playback", "pause_heading_ms", default=800))
+
+    @pause_heading_ms.setter
+    def pause_heading_ms(self, v: int) -> None:
+        self.set("playback", "pause_heading_ms", max(0, min(5000, int(v))))
 
     @property
     def pause_paragraph_ms(self) -> int:

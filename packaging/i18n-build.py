@@ -22,6 +22,12 @@ PO = PO_DIR / f"{DOMAIN}.po"
 MO = PO_DIR / f"{DOMAIN}.mo"
 
 TRANSLATIONS = {
+    "  ⚠ Иконка в трее недоступна: в системе нет службы значков\n    (в GNOME это расширение AppIndicator Support). Сообщения идут\n    уведомлениями, управление — из окна и с горячих клавиш.": "  ⚠ Tray icon unavailable: no icon service in the system\n    (in GNOME it is the AppIndicator Support extension). Messages go\n    as notifications; control from the window and hotkeys.",
+    # правки после перевода на GTK4
+    '\\r  {file}: {percent:3d}%  ({done} из {total} МБ)': '\\r  {file}: {percent:3d}%  ({done} of {total} MB)',
+    'После заголовка главы:': 'After the chapter heading:',
+    'Отделяет название главы от её текста': 'Separates the chapter title from its body',
+    'Тишина на границе абзацев внутри главы': 'Silence at paragraph boundaries inside a chapter',
     "  ⚠ Иконка в трее недоступна: нужен пакет gir1.2-ayatanaappindicator3-0.1\n"
     "    и расширение AppIndicator в GNOME Shell. Сообщения идут уведомлениями.":
         "  ⚠ Tray icon unavailable: package gir1.2-ayatanaappindicator3-0.1 is required\n"
@@ -101,10 +107,6 @@ TRANSLATIONS = {
     "Сбросить все настройки к значениям по умолчанию?":
         "Reset all settings to their defaults?",
 
-    "📋  Озвучить буфер обмена": "📋  Speak the clipboard",
-    "⚙️  Настройки": "⚙️  Settings",
-    "ℹ️  О программе": "ℹ️  About",
-    "✖  Выход": "✖  Quit",
 
     # поля окна настроек
     "Озвучить выделенное:": "Speak selection:",
@@ -121,7 +123,6 @@ TRANSLATIONS = {
     "Ollama (Локальный)": "Ollama (local)",
     "OpenAI (Облачный)": "OpenAI (cloud)",
     "Пользовательский (Custom API)": "Custom (custom API)",
-    "Кликните для выбора…": "Click to choose…",
 
     # язык интерфейса
     "Язык интерфейса: {language}": "Interface language: {language}",
@@ -136,10 +137,30 @@ TRANSLATIONS = {
     "Заменяю работающую сборку {old} на {new}":
         "Replacing the running build {old} with {new}",
 
+    # меню значка в лотке (StatusNotifierItem)
+    "🔊  Показать окно": "🔊  Show window",
+    "📂  Открыть файл…": "📂  Open file…",
+    "📋  Озвучить буфер обмена": "📋  Speak the clipboard",
+    "⚙️  Настройки": "⚙️  Settings",
+    "ℹ️  О программе": "ℹ️  About",
+    "✖  Выход": "✖  Quit",
+
+    # открытие файла
+    "Открыть файл…": "Open file…",
+    "Открыть файл для озвучки": "Open a file to read aloud",
+    "Озвучить": "Read aloud",
+    "Книги FB2": "FB2 books",
+    "Текстовые файлы": "Text files",
+    "Все файлы": "All files",
+
+    # поле ввода комбинации
+    "Кликните для выбора…": "Click to choose…",
+
     # меню виджета
     "Озвучить буфер обмена": "Speak the clipboard",
     "Озвучить выделенное": "Speak the selection",
-    "Остановить": "Stop",
+    # «Остановить» уже переведён выше, у кнопок плеера: второй такой же ключ
+    # молча затирал первый, и правка в одном месте терялась.
     "Настройки": "Settings",
     "О программе": "About",
     "Выход": "Quit",

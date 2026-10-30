@@ -1,35 +1,64 @@
-"""Плавающий виджет воспроизведения — поверх всех окон, в правом нижнем углу (GTK3).
+"""Плавающий виджет воспроизведения — поверх всех окон, в правом нижнем углу (GTK4).
 
-Переписано с Qt на PyGObject: вместо сигналов — обычные callbacks-атрибуты
-(``on_pause_resume``, ``on_stop``, ``on_speed_changed``, ``on_rewind``,
-``on_seek_fraction``), вместо ``paintEvent`` — обработчик ``draw`` на cairo,
-вместо ``QPropertyAnimation`` — пошаговый таймер GLib.
+Версия на GTK4. Что отличается от GTK3-варианта, и почему:
+
+* фон окна рисует CSS (``border-radius`` у контейнера), а не cairo в сигнале
+  ``draw``: у GTK4 окно не рисуют, а собирают из виджетов;
+* ``pack_start`` заменён на ``append`` с ``hexpand``: раскладка в GTK4 без
+  «упаковщиков»;
+* события мыши приходят контроллерами (``Gtk.GestureClick``,
+  ``Gtk.EventControllerMotion``), а не сигналами ``button-press-event``;
+* ``move()`` у окна больше нет, поэтому угол задаёт ``ui/layer_shell``
+  (протокол layer-shell, а на X11 — запрос к X-серверу);
+* прозрачность меняется через CSS: ``Gtk.Widget.set_opacity`` удалён.
 """
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Callable
+import math
+from collections.abc import Callable
 
 import gi
 
-gi.require_version("Gdk", "3.0")
-gi.require_version("Gtk", "3.0")
-
+gi.require_version("Gdk", "4.0")
+gi.require_version("Gtk", "4.0")
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
-from ..core.audio_player import SPEED_AVAILABLE
-from ..i18n import _
+from ..core.audio_player import SPEED_AVAILABLE  # noqa: E402
+from ..i18n import _  # noqa: E402
+from . import layer_shell  # noqa: E402
+from .window_icon import apply_icon  # noqa: E402
 
 WIDGET_WIDTH = 360
 WIDGET_HEIGHT = 95
 CORNER_RADIUS = 14
 
+APP_TITLE = "Silero TTS Reader"
+
+# Глифы кнопок. ⏸ (U+23F8) и ⏹ (U+23F9) есть только в Unifont и FreeSerif:
+# система подставляет их вместо Noto, и значки выходят заметно мельче, чем ◀▶
+# у перемотки. Эти символы есть в Noto и рисуются в том же масштабе.
+# Папка из Noto Emoji: такой глиф узнаётся сразу и не требует подписи.
+OPEN_GLYPH = "📂"
+PAUSE_GLYPH = "▌▌"
+PLAY_GLYPH = "▶"
+STOP_GLYPH = "■"
+
+# Выбор скорости: шаг 0,1× — этого достаточно, а список остаётся коротким.
+SPEED_DEFAULT = 1.0
+SPEED_CHOICES = (0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0)
+
+
+def speed_label(value: float) -> str:
+    """Подпись скорости: «1×», «1.25×» — без лишнего нуля."""
+    return f"{value:.3g}×"
+
 
 class ProgressBar(Gtk.DrawingArea):
     """Полоса прогресса, которая по клику сообщает долю 0.0–1.0.
 
-    Своя отрисовка вместо ``Gtk.ProgressBar``: у GTK3 нельзя покрасить «заполнение»
-    отдельным цветом без хаков с CSS-узлами, а здесь нужен акцент темы.
+    Своя отрисовка вместо ``Gtk.ProgressBar``: у него нельзя покрасить
+    «заполнение» отдельным цветом без хаков с CSS-узлами, а здесь нужен
+    акцент темы.
     """
 
     def __init__(self, on_seek) -> None:
@@ -39,14 +68,12 @@ class ProgressBar(Gtk.DrawingArea):
         self._track = "rgba(255, 255, 255, 0.15)"
         self._fill = "#6366f1"
         self.set_size_request(-1, 4)
-        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
-        try:
-            cursor = Gdk.Cursor.new_from_name(self.get_display(), "pointer")
-            self.window and self.window.set_cursor(cursor)  # type: ignore[union-attr]
-            self._cursor = cursor
-        except Exception:
-            self._cursor = None
-        self.connect("button-press-event", self._on_button_press)
+        self.set_draw_func(self._draw)
+        self.set_cursor(Gdk.Cursor.new_from_name("pointer", None))
+
+        click = Gtk.GestureClick()
+        click.connect("pressed", self._on_pressed)
+        self.add_controller(click)
 
     def apply_theme(self, track: str, fill: str) -> None:
         self._track = track
@@ -57,14 +84,7 @@ class ProgressBar(Gtk.DrawingArea):
         self._fraction = max(0.0, min(1.0, float(value)))
         self.queue_draw()
 
-    def do_realize(self) -> None:  # noqa: N802 — имя хука GTK
-        Gtk.DrawingArea.do_realize(self)
-        if self._cursor is not None:
-            self.get_window().set_cursor(self._cursor)
-
-    def do_draw(self, cr) -> bool:  # noqa: N802
-        width = self.get_allocated_width()
-        height = self.get_allocated_height()
+    def _draw(self, _area, cr, width: int, height: int) -> None:
         radius = height / 2
 
         cr.set_source_rgba(*self._rgba(self._track))
@@ -76,16 +96,15 @@ class ProgressBar(Gtk.DrawingArea):
             self._rounded_rect(cr, 0, 0, filled, height, radius)
             cr.set_source_rgba(*self._rgba(self._fill))
             cr.fill()
-        return False
 
     @staticmethod
     def _rounded_rect(cr, x: float, y: float, w: float, h: float, r: float) -> None:
         r = max(0.0, min(r, w / 2, h / 2))
         cr.new_sub_path()
-        cr.arc(x + w - r, y + r, r, -1.5708, 0)
-        cr.arc(x + w - r, y + h - r, r, 0, 1.5708)
-        cr.arc(x + r, y + h - r, r, 1.5708, 3.1416)
-        cr.arc(x + r, y + r, r, 3.1416, 4.7124)
+        cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+        cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+        cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+        cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
         cr.close_path()
 
     @staticmethod
@@ -111,51 +130,26 @@ class ProgressBar(Gtk.DrawingArea):
             )
         return (0.39, 0.4, 0.95, 1.0)
 
-    def _on_button_press(self, _widget, event) -> bool:
-        if event.button == 1 and self.get_allocated_width() > 0:
-            fraction = max(0.0, min(1.0, event.x / self.get_allocated_width()))
-            self.set_fraction(fraction)
-            if self._on_seek:
-                self._on_seek(fraction)
-            return True
-        return False
+    def _on_pressed(self, gesture, _n_press, x: float, _y: float) -> None:
+        if gesture.get_current_button() != 1:
+            return
+        width = self.get_width()
+        if width <= 0:
+            return
+        fraction = max(0.0, min(1.0, x / width))
+        self.set_fraction(fraction)
+        if self._on_seek:
+            self._on_seek(fraction)
 
 
-APP_TITLE = "Silero TTS Reader"
-
-# Глифы кнопок. ⏸ (U+23F8) и ⏹ (U+23F9) есть только в Unifont и FreeSerif:
-# система подставляет их вместо Noto, и значки выходят заметно мельче, чем ◀▶
-# у перемотки. Эти символы есть в Noto и рисуются в том же масштабе.
-PAUSE_GLYPH = "▌▌"
-PLAY_GLYPH = "▶"
-STOP_GLYPH = "■"
-
-# Выбор скорости: шаг 0,1× — этого достаточно, а список остаётся коротким.
-SPEED_DEFAULT = 1.0
-SPEED_CHOICES = (0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0)
-
-
-def _icon_file() -> str:
-    """Иконка приложения: из установленного пакета или из репозитория."""
-    candidates = (
-        Path("/usr/share/icons/hicolor/256x256/apps/silero-tts-reader.png"),
-        Path("/usr/share/icons/hicolor/128x128/apps/silero-tts-reader.png"),
-        Path("/usr/share/pixmaps/silero-tts-reader.png"),
-        Path(__file__).resolve().parent.parent.parent / "assets" / "icon.png",
-    )
-    for candidate in candidates:
-        if candidate.is_file():
-            return str(candidate)
-    return ""
-
-
-class PlaybackWidget(Gtk.Window):
+class PlaybackWidget(Gtk.ApplicationWindow):
     """Полупрозрачный виджет управления воспроизведением поверх других окон."""
 
-    def __init__(self) -> None:
-        super().__init__(type=Gtk.WindowType.TOPLEVEL)
+    def __init__(self, application=None, monitor_index: int | None = None) -> None:
+        super().__init__(application=application)
 
-        # Callbacks, которые проставляет приложение (замена pyqtSignal)
+        # Callbacks, которые проставляет приложение
+        self.on_open_file: Callable[[], None] | None = None
         self.on_pause_resume: Callable[[], None] | None = None
         self.on_stop: Callable[[], None] | None = None
         self.on_speed_changed: Callable[[float], None] | None = None
@@ -167,132 +161,141 @@ class PlaybackWidget(Gtk.Window):
         self._is_paused = False
         self._fade_source: int | None = None
         self._hide_timer: int | None = None
+        # Как окно поставлено: "layer" (протокол), "x11" (запрос к серверу)
+        # или "none" (место выбрал композитор). Для последнего наш move() не
+        # действует вовсе.
+        self._position_mode = "none"
+        self._monitor_index = monitor_index
+
+        self._metrics = {
+            "width": WIDGET_WIDTH, "height": WIDGET_HEIGHT,
+            "button": 30, "corner": CORNER_RADIUS,
+            "font_label": 13, "font_button": 12, "font_small": 11, "progress": 4,
+        }
+        self._last_theme: tuple[bool, str] | None = None
 
         self._setup_window()
         self._setup_ui()
-        # Кнопки создаются в _setup_ui, поэтому размеры считаем ещё раз уже
-        # по готовому интерфейсу — иначе они остаются исходными 30×30.
         self._apply_metrics()
-        self._position_bottom_right()
         self.apply_theme(True, self._accent_color)
+        # Угол задаём ДО показа: протокол переоформляет поверхность при её
+        # создании, для уже показанного окна это поздно.
+        self._place_window()
 
     # ── Окно ─────────────────────────────────────────────────────────────────
 
     def _setup_window(self) -> None:
         self.set_decorated(False)
         self.set_resizable(False)
-        # Окно должно находиться в панели задач и в переключателе окон: иначе
-        # пользователь не видит, что приложение работает, и не может вернуться
-        # к нему после переключения на другое.
-        self.set_skip_taskbar_hint(False)
-        self.set_skip_pager_hint(False)
-        self.set_accept_focus(True)
-        self.set_type_hint(Gdk.WindowTypeHint.NORMAL)
         self.set_title(APP_TITLE)
-        # Иконка по имени из темы: менеджер окон сопоставляет её с .desktop и
-        # показывает нужный значок. Файл напрямую не годится — вместо иконки
-        # приложения тогда рисуется стандартная «шестерёнка» GTK.
-        self.set_wmclass("silero-tts-reader", "Silero TTS Reader")
-        self.set_icon_name("silero-tts-reader")
-        icon = _icon_file()
-        if icon:
-            try:
-                self.set_icon_from_file(icon)
-            except GLib.Error as exc:
-                # i18n: нет перевода — строка журнала в консоли
-                print(f"  Иконка из файла не загрузилась ({icon}): {exc}", flush=True)
-        self.set_position(Gtk.WindowPosition.NONE)
-        # Размер зависит от монитора и его масштаба: при жёстких 360×95 виджет
-        # на HiDPI выглядел крошечным, а на широком экране — несоразмерно узким.
-        self._metrics = {"width": WIDGET_WIDTH, "height": WIDGET_HEIGHT,
-                         "button": 30, "corner": CORNER_RADIUS}
-        self._apply_metrics()
-        self.connect("notify::scale-factor", lambda *_: self._apply_metrics())
-        self.connect("screen-changed", lambda *_: self._apply_metrics())
-
-        # Прозрачный фон окна: сам фон рисуем на cairo, чтобы получить скругления.
-        screen = self.get_screen()
-        visual = screen.get_rgba_visual() if screen else None
-        if visual is not None and screen.is_composited():
-            self.set_visual(visual)
-        self.set_app_paintable(True)
+        # Значок — общим кодом: описание в ui/window_icon.py.
+        apply_icon(self)
+        self.set_default_size(WIDGET_WIDTH, WIDGET_HEIGHT)
 
         self._css = Gtk.CssProvider()
-        Gtk.StyleContext.add_provider_for_screen(
-            Gdk.Screen.get_default(),
-            self._css,
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(), self._css,
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
         )
-        self.set_name("playback-root")
+        # Прозрачность меняется отдельным провайдером: set_opacity в GTK4 нет.
+        self._opacity_css = Gtk.CssProvider()
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(), self._opacity_css,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+        )
 
-        # Перетаскивание за свободное место окна
-        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
-        self.connect("button-press-event", self._on_background_press)
-        self.connect("draw", self._on_draw)
+        self.connect("notify::scale-factor", lambda *_: self._apply_metrics())
 
     def _setup_ui(self) -> None:
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        box.set_margin_top(10)
-        box.set_margin_bottom(10)
-        box.set_margin_start(12)
-        box.set_margin_end(12)
-        self.add(box)
+        # Фон рисует CSS: border-radius у контейнера даёт скругления окна.
+        self._root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self._root.add_css_class("playback-root")
+        self._root.set_margin_top(10)
+        self._root.set_margin_bottom(10)
+        self._root.set_margin_start(12)
+        self._root.set_margin_end(12)
+        self.set_child(self._root)
 
         # ── Верхний ряд: заголовок и кнопки ──────────────────────────────────
         top_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        box.pack_start(top_row, False, False, 0)
+        self._root.append(top_row)
         self._top_row = top_row
 
         self._label = Gtk.Label(label=_("🔊 Воспроизведение"))
         self._label.set_xalign(0.0)
-        top_row.pack_start(self._label, False, False, 0)
-        top_row.pack_start(Gtk.Box(), True, True, 0)  # растяжка
+        top_row.append(self._label)
 
-        self._btn_rewind = self._make_button("◀◀", _("Назад на 5 секунд"), "playback-neutral")
+        spacer = Gtk.Box()
+        spacer.set_hexpand(True)
+        top_row.append(spacer)
+
+        # Кнопка открытия файла: раньше файл можно было дать только аргументом
+        # командной строки или через «Открыть с помощью».
+        self._btn_open = self._make_button(OPEN_GLYPH, _("Открыть файл…"),
+                                           "playback-neutral")
+        self._btn_open.connect("clicked", lambda _b: self._on_open_clicked())
+        top_row.append(self._btn_open)
+
+        self._btn_rewind = self._make_button("◀◀", _("Назад на 5 секунд"),
+                                             "playback-neutral")
         self._btn_rewind.connect("clicked", lambda _b: self._emit_rewind(-5.0))
-        top_row.pack_start(self._btn_rewind, False, False, 0)
+        top_row.append(self._btn_rewind)
 
-        self._btn_pause = self._make_button(PAUSE_GLYPH, _("Пауза / Продолжить"), "playback-accent")
+        self._btn_pause = self._make_button(PAUSE_GLYPH, _("Пауза / Продолжить"),
+                                            "playback-accent")
         self._btn_pause.connect("clicked", lambda _b: self._on_pause_resume_clicked())
-        top_row.pack_start(self._btn_pause, False, False, 0)
+        top_row.append(self._btn_pause)
 
-        self._btn_forward = self._make_button("▶▶", _("Вперёд на 5 секунд"), "playback-neutral")
+        self._btn_forward = self._make_button("▶▶", _("Вперёд на 5 секунд"),
+                                              "playback-neutral")
         self._btn_forward.connect("clicked", lambda _b: self._emit_rewind(5.0))
-        top_row.pack_start(self._btn_forward, False, False, 0)
+        top_row.append(self._btn_forward)
 
-        self._btn_stop = self._make_button(STOP_GLYPH, _("Остановить"), "playback-danger")
+        self._btn_stop = self._make_button(STOP_GLYPH, _("Остановить"),
+                                           "playback-danger")
         self._btn_stop.connect("clicked", lambda _b: self._on_stop_clicked())
-        top_row.pack_start(self._btn_stop, False, False, 0)
+        top_row.append(self._btn_stop)
 
         # ── Полоса прогресса и скорость справа от неё ────────────────────────
-        # Скорость — выпадающий список, а не слайдер: значения дискретные, и
-        # список показывает их сразу, без «поймай нужную четверть» мышью.
         progress_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        box.pack_start(progress_row, False, False, 0)
+        self._root.append(progress_row)
 
         self._progress = ProgressBar(self._on_timeline_clicked)
         self._progress.set_tooltip_text(_("Нажмите для перемотки"))
-        progress_row.pack_start(self._progress, True, True, 0)
+        self._progress.set_hexpand(True)
+        progress_row.append(self._progress)
 
-        self._speed_combo = Gtk.ComboBoxText()
-        for choice in SPEED_CHOICES:
-            self._speed_combo.append(str(choice), f"{choice:.2g}×")
-        self._speed_combo.set_active_id(str(SPEED_DEFAULT))
+        # Скорость — выпадающий список, а не слайдер: значения дискретные, и
+        # список показывает их сразу, без «поймай нужную четверть» мышью.
+        # В GTK4 ComboBoxText устарел, вместо него DropDown со списком строк.
+        self._speed_combo = Gtk.DropDown.new_from_strings(
+            [speed_label(choice) for choice in SPEED_CHOICES])
+        self._speed_combo.set_selected(SPEED_CHOICES.index(SPEED_DEFAULT))
         self._speed_combo.set_tooltip_text(
             _("Скорость воспроизведения") if SPEED_AVAILABLE
             else _("Скорость недоступна: не найден rubberband")
         )
         self._speed_combo.set_sensitive(SPEED_AVAILABLE)
         self._speed_combo.set_valign(Gtk.Align.CENTER)
-        self._speed_combo.connect("changed", self._on_speed_selected)
-        progress_row.pack_start(self._speed_combo, False, False, 0)
+        self._speed_combo.connect("notify::selected", self._on_speed_selected)
+        progress_row.append(self._speed_combo)
+
+        # Перетаскивание за свободное место окна и отмена автоскрытия при
+        # наведении: в GTK4 это контроллеры, а не сигналы окна.
+        drag = Gtk.GestureClick()
+        drag.connect("pressed", self._on_background_press)
+        self._root.add_controller(drag)
+
+        motion = Gtk.EventControllerMotion()
+        motion.connect("enter", self._on_enter)
+        self._root.add_controller(motion)
 
     def set_menu_model(self, model) -> None:
         """Кнопка меню в виджете: те же действия, что и у клавиш.
 
         Модель приходит из приложения (``app.*``), поэтому в окне не нужен
         собственный набор действий — достаточно, чтобы окно было привязано к
-        приложению (``Gtk.Application.add_window``).
+        приложению.
         """
         if model is None:
             return
@@ -300,18 +303,16 @@ class PlaybackWidget(Gtk.Window):
         button.set_menu_model(model)
         button.set_tooltip_text(_("Меню"))
         button.set_size_request(self._metrics.get("button", 30),
-                               self._metrics.get("button", 30))
-        # GTK3: класс ставится через StyleContext (add_css_class — это уже GTK4)
-        button.get_style_context().add_class("playback-neutral")
-        self._top_row.pack_start(button, False, False, 0)
-        button.show()
+                                self._metrics.get("button", 30))
+        button.add_css_class("playback-neutral")
+        self._top_row.append(button)
         self._menu_button = button
 
     def _make_button(self, label: str, tooltip: str, css_class: str) -> Gtk.Button:
         btn = Gtk.Button(label=label)
         btn.set_size_request(30, 30)
         btn.set_tooltip_text(tooltip)
-        btn.get_style_context().add_class(css_class)
+        btn.add_css_class(css_class)
         return btn
 
     # ── Тема ─────────────────────────────────────────────────────────────────
@@ -322,30 +323,49 @@ class PlaybackWidget(Gtk.Window):
         self._last_theme = (is_dark, accent_color)
         font_label = self._metrics.get("font_label", 13)
         font_button = self._metrics.get("font_button", 12)
+        # Глиф паузы (▌▌) заметно крупнее стрелок при том же кегле: два
+        # закрашенных бруска выглядят тяжелее контурных треугольников. Поэтому
+        # для него отдельный кегль — на 15 % меньше основного.
+        font_pause = max(9, round(font_label * 0.85))
         font_small = self._metrics.get("font_small", 11)
 
         if is_dark:
-            fg, muted = "#e2e8f0", "#94a3b8"
+            fg = "#e2e8f0"
             track = "rgba(255, 255, 255, 0.15)"
+            background = "rgba(24, 24, 27, 0.97)"
+            border = "rgba(255, 255, 255, 0.10)"
             neutral_bg = "rgba(255, 255, 255, 0.12)"
             neutral_hover = "rgba(255, 255, 255, 0.22)"
             neutral_active = "rgba(255, 255, 255, 0.32)"
             neutral_border = "rgba(255, 255, 255, 0.15)"
             hover_accent = _lighten(accent_color, 1.2)
         else:
-            fg, muted = "#0f172a", "#64748b"
+            fg = "#0f172a"
             track = "rgba(0, 0, 0, 0.1)"
+            background = "rgba(255, 255, 255, 0.97)"
+            border = "rgba(0, 0, 0, 0.16)"
             neutral_bg = "rgba(0, 0, 0, 0.06)"
             neutral_hover = "rgba(0, 0, 0, 0.12)"
             neutral_active = "rgba(0, 0, 0, 0.2)"
             neutral_border = "rgba(0, 0, 0, 0.12)"
             hover_accent = _lighten(accent_color, 0.87)
 
+        corner = self._metrics.get("corner", CORNER_RADIUS)
         self._css.load_from_data(
             f"""
-            #playback-root {{ background-color: transparent; }}
-            #playback-root label {{ color: {fg}; font-size: {font_label}px; font-weight: 600; }}
-            #playback-root #playback-warning {{ color: #f59e0b; font-size: {font_small}px; font-weight: normal; }}
+            window {{
+                background-color: transparent;
+            }}
+            .playback-root {{
+                background-color: {background};
+                border: 1px solid {border};
+                border-radius: {corner}px;
+            }}
+            .playback-root label {{
+                color: {fg};
+                font-size: {font_label}px;
+                font-weight: 600;
+            }}
             .playback-neutral {{
                 background-image: none;
                 background-color: {neutral_bg};
@@ -371,7 +391,7 @@ class PlaybackWidget(Gtk.Window):
                 color: {fg};
                 border: 1px solid {neutral_border};
                 border-radius: 8px;
-                font-size: {font_label}px;
+                font-size: {font_pause}px;
                 padding: 0;
                 text-shadow: none;
                 box-shadow: none;
@@ -402,69 +422,32 @@ class PlaybackWidget(Gtk.Window):
                 color: #ffffff;
             }}
             .playback-danger:active {{ background-color: #dc2626; color: #ffffff; }}
-            scale trough {{
-                background-color: {track};
-                border-radius: 2px;
-                min-height: 4px;
+            dropdown {{
+                background-image: none;
+                background-color: {neutral_bg};
+                color: {fg};
+                border: 1px solid {neutral_border};
+                border-radius: 8px;
+                font-size: {font_small}px;
+                min-width: 52px;
             }}
-            scale highlight {{
-                background-color: {accent_color};
-                border-radius: 2px;
-            }}
-            scale slider {{
-                background-color: {accent_color};
+            dropdown > button {{
+                background-image: none;
+                background-color: transparent;
                 border: none;
-                border-radius: 6px;
-                min-width: 12px;
-                min-height: 12px;
-                margin: -4px 0;
+                box-shadow: none;
+                padding: 0 4px;
             }}
-            """.encode("utf-8")
+            """.encode()
         )
-
-        # Цвет берётся из fg, поэтому ветки одинаковы — раньше во второй
-        # оставалась непереведённая строка.
         self._label.set_markup(
-            f'<span foreground="{fg}" size="small" weight="bold">{_("🔊 Воспроизведение")}</span>'
+            f'<span foreground="{fg}" size="small" weight="bold">'
+            f'{_("🔊 Воспроизведение")}</span>'
         )
-
         self._progress.apply_theme(track, accent_color)
         if self._is_paused:
             self.set_paused(True)
-        self.queue_draw()
-
-    # ── Отрисовка фона окна ──────────────────────────────────────────────────
-
-    def _on_draw(self, _widget, cr) -> bool:
-        """Нарисовать скруглённый фон ПОД содержимым.
-
-        Именно сигнал ``draw``: у Gtk.Window хук ``do_draw`` и есть отрисовка
-        детей, и переопределение его своими руками оставляло окно пустым —
-        фон рисовался, а метки и кнопки пропадали.
-        """
-        width = self.get_allocated_width()
-        height = self.get_allocated_height()
-        corner = self._metrics.get("corner", CORNER_RADIUS)
-
-        cr.new_sub_path()
-        cr.arc(width - corner, corner, corner, -1.5708, 0)
-        cr.arc(width - corner, height - corner, corner, 0, 1.5708)
-        cr.arc(corner, height - corner, corner, 1.5708, 3.1416)
-        cr.arc(corner, corner, corner, 3.1416, 4.7124)
-        cr.close_path()
-
-        if self._is_dark:
-            cr.set_source_rgba(24 / 255, 24 / 255, 27 / 255, 1.0)
-        else:
-            cr.set_source_rgba(1.0, 1.0, 1.0, 1.0)
-        cr.fill_preserve()
-        if self._is_dark:
-            cr.set_source_rgba(1, 1, 1, 0.1)
-        else:
-            cr.set_source_rgba(0, 0, 0, 0.16)
-        cr.set_line_width(1.0)
-        cr.stroke()
-        return False  # дети рисуются поверх
+        self._set_opacity(1.0)
 
     # ── Позиция и показ ──────────────────────────────────────────────────────
 
@@ -473,12 +456,13 @@ class PlaybackWidget(Gtk.Window):
         display = self.get_display() or Gdk.Display.get_default()
         if display is None:
             return None
-        window = self.get_window()
-        if window is not None:
-            monitor = display.get_monitor_at_window(window)
+        surface = self.get_surface()
+        if surface is not None:
+            monitor = display.get_monitor_at_surface(surface)
             if monitor is not None:
                 return monitor
-        return display.get_primary_monitor() or display.get_monitor(0)
+        # В GDK4 «основного» монитора нет — берём первый.
+        return layer_shell.monitor_at(self, 0)
 
     def _apply_metrics(self) -> None:
         """Подогнать размеры виджета под монитор и его масштаб.
@@ -490,15 +474,15 @@ class PlaybackWidget(Gtk.Window):
         monitor = self._monitor()
         if monitor is None:
             return
-        workarea = monitor.get_workarea()
+        area = monitor.get_geometry()
         scale = max(1, monitor.get_scale_factor())
 
-        base = int(workarea.width * 0.26)
+        base = int(area.width * 0.26)
         # Пределы: не мельче исходного и не шире трети экрана
-        width = max(WIDGET_WIDTH, min(base, int(workarea.width * 0.34), 900))
+        width = max(WIDGET_WIDTH, min(base, int(area.width * 0.34), 900))
         height = int(width * WIDGET_HEIGHT / WIDGET_WIDTH)
-        button = max(30, int(round(30 * width / WIDGET_WIDTH)))
-        corner = max(CORNER_RADIUS, int(round(CORNER_RADIUS * width / WIDGET_WIDTH)))
+        button = max(30, round(30 * width / WIDGET_WIDTH))
+        corner = max(CORNER_RADIUS, round(CORNER_RADIUS * width / WIDGET_WIDTH))
 
         # Текст и полоса прогресса крупнеют вместе с виджетом: иначе на широком
         # экране надписи выглядят мелкими, а полоса — толстой.
@@ -510,15 +494,17 @@ class PlaybackWidget(Gtk.Window):
         # самостоятельный элемент управления.
         progress = max(3, min(4, round(4 * ratio ** 0.4)))
 
-        changed = self._metrics != {"width": width, "height": height,
-                                    "button": button, "corner": corner}
-        self._metrics = {"width": width, "height": height,
-                         "button": button, "corner": corner, "scale": scale,
-                         "font_label": font_label, "font_button": font_button,
-                         "font_small": font_small, "progress": progress}
+        changed = self._metrics.get("width") != width
+        self._metrics.update({
+            "width": width, "height": height, "button": button,
+            "corner": corner, "scale": scale, "font_label": font_label,
+            "font_button": font_button, "font_small": font_small,
+            "progress": progress,
+        })
         self.set_size_request(width, height)
 
-        for button_widget in (getattr(self, "_btn_rewind", None),
+        for button_widget in (getattr(self, "_btn_open", None),
+                              getattr(self, "_btn_rewind", None),
                               getattr(self, "_btn_pause", None),
                               getattr(self, "_btn_forward", None),
                               getattr(self, "_btn_stop", None)):
@@ -529,58 +515,54 @@ class PlaybackWidget(Gtk.Window):
         if progress_bar is not None:
             progress_bar.set_size_request(-1, progress)
 
-        if changed:
-            self.queue_draw()
+        if changed and self._last_theme is not None:
             # Тема описана в CSS фиксированными размерами — переписываем её
             # под новые метрики, иначе шрифты остаются прежними.
-            last_theme = getattr(self, "_last_theme", None)
-            if last_theme is not None:
-                self.apply_theme(*last_theme)
+            self.apply_theme(*self._last_theme)
 
-    def _position_bottom_right(self) -> None:
-        monitor = self._monitor()
-        if monitor is None:
-            return
-        workarea = monitor.get_workarea()
+    def _place_window(self) -> None:
+        """Поставить окно в правый нижний угол доступным способом."""
         width = self._metrics.get("width", WIDGET_WIDTH)
         height = self._metrics.get("height", WIDGET_HEIGHT)
-        x = workarea.x + workarea.width - width - 16
-        y = workarea.y + workarea.height - height - 16
-        self.move(x, y)
+        self._position_mode = layer_shell.place_bottom_right(
+            self, width, height, margin=16, monitor_index=self._monitor_index)
 
     def restore_position(self, x: int, y: int) -> None:
+        """Вернуть окно на сохранённое место (только если это возможно).
+
+        Под layer-shell место задаёт композитор, а под Wayland без протокола
+        двигать окно нельзя вовсе — тогда вызов честно ничего не делает.
+        """
+        if self._position_mode == "layer":
+            return
         if x < 0 or y < 0:
-            self._position_bottom_right()
-        else:
-            self.move(x, y)
+            self._place_window()
+            return
+        if self._position_mode == "x11":
+            layer_shell.move_x11(self, x, y)
 
     def fade_in(self) -> None:
         """Показать окно, не блокируя главный поток.
 
-        `show_all()` и `present()` на XWayland могут ждать ответа сервера, а
-        `set_keep_above` там же вешает окно: в дампе стеков главный поток стоял
-        внутри fade_in, и приложение не показывало окно, пока шёл синтез.
-        Поэтому показ откладывается на ближайший оборот цикла GLib.
+        Показ откладывается на ближайший оборот цикла GLib: ``present()`` на
+        XWayland может ждать ответа сервера, и приложение не показывало окно,
+        пока шёл синтез.
         """
         self._cancel_hide_timer()
         self._stop_fade()
         GLib.idle_add(self._show_now)
 
     def _show_now(self) -> bool:
-        self.set_opacity(1.0)
-        self.show_all()
+        self._set_opacity(1.0)
         self.present()
-        # Позицию задаём после показа: до map менеджер окон её игнорирует, и
-        # виджет оказывался в левом верхнем углу вместо правого нижнего.
-        self._position_bottom_right()
+        # Позицию задаём после показа: до map менеджер окон её игнорирует.
+        if self._position_mode != "layer":
+            self._place_window()
         # Один раз в журнал: видно ли окно на самом деле. Без этой строки
-        # «окно не появилось» приходится угадывать — а с ней видно и размер,
-        # и позицию, и то, что окно отображено.
-        # i18n: нет перевода — строка журнала в консоли
+        # «окно не появилось» приходится угадывать.
         print(
-            f"  Окно показано: {self.get_allocated_width()}×{self.get_allocated_height()}"
-            f", позиция {self.get_position()}, видимо {self.get_visible()}"
-            f", отображено {self.get_mapped()}",
+            f"  Окно показано: {self.get_width()}×{self.get_height()}"
+            f", позиция {self._position_mode}, видимо {self.get_visible()}",
             flush=True,
         )
         return False   # одноразовый idle
@@ -598,13 +580,23 @@ class PlaybackWidget(Gtk.Window):
     def _fade_step(self, opacity: float) -> bool:
         opacity -= 0.08
         if opacity <= 0.0:
-            self.set_opacity(0.0)
+            self._set_opacity(0.0)
             self._fade_source = None
-            self.hide()
+            self.set_visible(False)
             return False
-        self.set_opacity(opacity)
+        self._set_opacity(opacity)
         self._fade_source = GLib.timeout_add(16, self._fade_step, opacity)
         return False
+
+    def _set_opacity(self, value: float) -> None:
+        """Прозрачность окна через CSS: ``set_opacity`` в GTK4 удалён."""
+        self._opacity = max(0.0, min(1.0, float(value)))
+        self._opacity_css.load_from_data(
+            f".playback-root {{ opacity: {self._opacity:.2f}; }}".encode())
+
+    def get_opacity(self) -> float:
+        """Текущая прозрачность — для проверок и журнала."""
+        return getattr(self, "_opacity", 1.0)
 
     def _stop_fade(self) -> None:
         if self._fade_source is not None:
@@ -632,8 +624,21 @@ class PlaybackWidget(Gtk.Window):
         # Ближайшее значение из списка: конфиг мог хранить 1,37 после слайдера
         nearest = min(SPEED_CHOICES, key=lambda value: abs(value - clamped))
         self._speed_combo.handler_block_by_func(self._on_speed_selected)
-        self._speed_combo.set_active_id(str(nearest))
+        self._speed_combo.set_selected(SPEED_CHOICES.index(nearest))
         self._speed_combo.handler_unblock_by_func(self._on_speed_selected)
+
+    def get_speed(self) -> float:
+        """Выбранная скорость — для проверок."""
+        selected = self._speed_combo.get_selected()
+        if 0 <= selected < len(SPEED_CHOICES):
+            return SPEED_CHOICES[selected]
+        return SPEED_DEFAULT
+
+    # ── Обработчики ──────────────────────────────────────────────────────────
+
+    def _on_open_clicked(self) -> None:
+        if self.on_open_file is not None:
+            self.on_open_file()
 
     def _on_pause_resume_clicked(self) -> None:
         if self.on_pause_resume:
@@ -653,27 +658,29 @@ class PlaybackWidget(Gtk.Window):
         if self.on_seek_fraction:
             self.on_seek_fraction(fraction)
 
-    def _on_speed_selected(self, combo: Gtk.ComboBoxText) -> None:
+    def _on_speed_selected(self, combo, _param=None) -> None:
         """Скорость выбрана в списке."""
-        active = combo.get_active_id()
-        if not active:
+        if not combo.get_sensitive():
             return
+        self.set_progress(self._progress._fraction)
         if self.on_speed_changed:
-            self.on_speed_changed(float(active))
+            self.on_speed_changed(self.get_speed())
 
-    def _on_background_press(self, _widget, event) -> bool:
-        """Перетаскивание окна за фон: дети события не отдают, поэтому только пустые места."""
-        if event.button == 1:
-            self.begin_move_drag(event.button, int(event.x_root), int(event.y_root), event.time)
-            return True
-        return False
+    def _on_background_press(self, gesture, _n_press, x: float, y: float) -> None:
+        """Перетаскивание окна за фон: дети события не отдают, только пустые места."""
+        if gesture.get_current_button() != 1:
+            return
+        surface = self.get_surface()
+        device = gesture.get_current_event_device()
+        if surface is None or device is None:
+            return
+        surface.begin_move(device, 1, x, y, gesture.get_current_event_time())
 
-    # Наведение мышью отменяет автоскрытие, как в Qt-версии
-    def do_enter_notify_event(self, _event) -> bool:  # noqa: N802
+    def _on_enter(self, _controller, _x: float, _y: float) -> None:
+        """Наведение мышью отменяет автоскрытие, как в исходной версии."""
         self._cancel_hide_timer()
         self._stop_fade()
-        self.set_opacity(1.0)
-        return False
+        self._set_opacity(1.0)
 
 
 def _lighten(color: str, factor: float) -> str:

@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from silero_tts_reader import build_info, instance  # noqa: E402
+from silero_tts_reader import build_info, instance
 
 CHECKS = 0
 

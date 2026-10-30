@@ -11,6 +11,7 @@ GApplication сам следит, чтобы процесс был один, н�
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import signal
@@ -139,10 +140,8 @@ def clear() -> None:
             return
     except (OSError, ValueError):
         return
-    try:
+    with contextlib.suppress(OSError):
         RUNNING_FILE.unlink()
-    except OSError:
-        pass
 
 
 def request_shutdown(instance: RunningInstance, timeout: float = SHUTDOWN_TIMEOUT) -> bool:
@@ -166,10 +165,8 @@ def request_shutdown(instance: RunningInstance, timeout: float = SHUTDOWN_TIMEOU
             return True
         time.sleep(POLL_INTERVAL)
 
-    try:
+    with contextlib.suppress(OSError):
         os.kill(instance.pid, signal.SIGKILL)
-    except OSError:
-        pass
 
     deadline = time.monotonic() + 2.0
     while time.monotonic() < deadline:

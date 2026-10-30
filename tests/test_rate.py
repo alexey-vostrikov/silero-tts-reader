@@ -14,10 +14,10 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import numpy as np  # noqa: E402
+import numpy as np
 
-from silero_tts_reader.cli import _resolve_speed, _spd_percent_to_speed  # noqa: E402
-from silero_tts_reader.core import rate  # noqa: E402
+from silero_tts_reader.cli import _resolve_speed, _spd_percent_to_speed
+from silero_tts_reader.core import rate
 
 CHECKS = 0
 SAMPLE_RATE = 48000
@@ -45,21 +45,23 @@ def test_available() -> None:
 
 def test_percent_mapping() -> None:
     print("\n2. Шкала speech-dispatcher → множитель")
-    cases = {
-        0: 1.0,      # без изменений
-        100: 2.0,    # максимум
-        -100: 0.5,   # минимум
-        50: 1.5,
-        -50: 0.75,
-        200: 2.0,    # за верхней границей — обрезается
-        -200: 0.5,   # за нижней — обрезается
+    # Список пар, а не словарь: 0 и 0.0, 50 и 50.0 — ОДИН и тот же ключ, и
+    # float-случаи молча не выполнялись, пока проверка была словарём.
+    cases = [
+        (0, 1.0),      # без изменений
+        (100, 2.0),    # максимум
+        (-100, 0.5),   # минимум
+        (50, 1.5),
+        (-50, 0.75),
+        (200, 2.0),    # за верхней границей — обрезается
+        (-200, 0.5),   # за нижней — обрезается
         # speech-dispatcher подставляет $RATE как float: «0.00», «50.00»
-        0.0: 1.0,
-        50.0: 1.5,
-        -50.0: 0.75,
-        33.33: 1.33,     # округляется до 33 → 1.33
-    }
-    for percent, expected in cases.items():
+        (0.0, 1.0),
+        (50.0, 1.5),
+        (-50.0, 0.75),
+        (33.33, 1.33),  # округляется до 33 → 1.33
+    ]
+    for percent, expected in cases:
         got = _spd_percent_to_speed(percent)
         check(abs(got - expected) < 1e-6, f"{percent:+g} → {got:.2f}×")
 
@@ -112,19 +114,58 @@ def test_stretch() -> None:
     check(float(np.max(np.abs(stretched))) < 1.0, "амплитуда осталась в пределах [-1, 1]")
 
 
-def test_failure_is_loud() -> None:
-    print("\n5. Понятный отказ без rubberband")
+def test_without_rubberband() -> None:
+    """Без rubberband озвучка работает: скорость просто не меняется.
+
+    Отсутствие необязательного пакета — не повод падать: синтез и
+    воспроизведение идут своим ходом, а кнопка скорости в интерфейсе
+    выключена (см. SPEED_AVAILABLE). Раньше здесь поднималась ошибка, и
+    пользователь без пакета не мог слушать вообще ничего.
+    """
+    print("\n5. Без rubberband: речь идёт, скорость не меняется")
     saved = rate._RUBBERBAND
     rate._RUBBERBAND = None
+    try:
+        check(rate.available() is False, "rate.available() = False")
+        audio = tone(0.2)
+        got = rate.time_stretch(audio, SAMPLE_RATE, 1.5)
+        check(len(got) == len(audio),
+              f"длина не изменилась: было {len(audio)}, стало {len(got)}")
+        check(np.array_equal(got, audio), "звук вернулся без изменений")
+    finally:
+        rate._RUBBERBAND = saved
+
+
+def test_failure_reports_code() -> None:
+    """Ненулевой код rubberband — понятная ошибка с кодом, а не падение внутри.
+
+    Ветка «rubberband отработал с ошибкой» раньше не проверялась вовсе, хотя
+    живой пользователь попадает именно в неё: без растяжения звук просто не
+    меняется, и сообщение об этом — единственное, что он увидит.
+    """
+    print("\n6. Отказ rubberband с ненулевым кодом")
+    saved_binary, saved_run = rate._RUBBERBAND, rate.subprocess.run
+    rate._RUBBERBAND = "/usr/bin/rubberband"
+
+    def fake_run(*_args, **_kwargs):
+        return SimpleNamespace(returncode=3, stdout="", stderr="cannot open file")
+
+    rate.subprocess.run = fake_run
     try:
         try:
             rate.time_stretch(tone(0.2), SAMPLE_RATE, 1.5)
         except RuntimeError as exc:
-            check("rubberband-cli" in str(exc), f"ошибка называет пакет: {exc}")
+            text = str(exc)
+            check("3" in text, f"ошибка называет код возврата: {text}")
+            check("cannot open file" in text, f"ошибка показывает вывод: {text}")
+        except UnboundLocalError as exc:
+            raise AssertionError(
+                f"вместо понятной ошибки — падение на локальной переменной: {exc}"
+            ) from exc
         else:
-            raise AssertionError("без rubberband растяжение не упало")
+            raise AssertionError("ненулевой код rubberband не поднял ошибку")
     finally:
-        rate._RUBBERBAND = saved
+        rate._RUBBERBAND, rate.subprocess.run = saved_binary, saved_run
 
 
 def main() -> int:
@@ -133,7 +174,8 @@ def main() -> int:
     test_percent_mapping()
     test_speed_priority()
     test_stretch()
-    test_failure_is_loud()
+    test_without_rubberband()
+    test_failure_reports_code()
     print(f"\nвсе проверки пройдены: {CHECKS}")
     return 0
 

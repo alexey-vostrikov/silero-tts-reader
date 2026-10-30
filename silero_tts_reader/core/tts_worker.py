@@ -11,9 +11,8 @@ from __future__ import annotations
 import queue
 import re
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import Callable
 
 import numpy as np
 
@@ -27,24 +26,34 @@ _DONE = object()
 
 @dataclass(frozen=True)
 class Quantum:
-    """Единица воспроизведения вместе с тем, как она начинается.
+    """Единица воспроизведения вместе с тем, где она стоит в тексте.
 
-    Пауза ставится не «между всеми сегментами одинаково», а по смыслу: перед
-    репликой диалога нужна заметная, на границе абзаца — покороче. Поэтому
-    воркеру мало текста, ему нужен вид кванта.
+    Пауз три, и они разные по смыслу: перед репликой диалога, после заголовка
+    главы и между абзацами. Поэтому воркеру мало текста — ему нужен вид кванта
+    и то, что было перед ним.
     """
 
     text: str
     kind: str = "sentence"          # sentence | dialogue | heading
     new_paragraph: bool = False     # первый квант абзаца
+    after_heading: bool = False     # идёт сразу после заголовка главы
 
-    def pause_ms(self, dialogue_ms: int, paragraph_ms: int) -> int:
-        """Сколько тишины поставить перед этим квантом."""
+    def pause_ms(self, dialogue_ms: int, heading_ms: int, paragraph_ms: int) -> int:
+        """Сколько тишины поставить перед этим квантом.
+
+        Берётся самая длинная из подходящих пауз, а не первая по порядку: тело
+        главы часто начинается с реплики, и тогда нужны обе — и отделение от
+        заголовка, и пауза перед прямой речью. Суммировать их нельзя, иначе на
+        стыке набегает полторы секунды тишины вместо отчётливой паузы.
+        """
+        candidates: list[int] = []
         if self.kind == "dialogue":
-            return max(0, int(dialogue_ms))
+            candidates.append(dialogue_ms)
+        if self.after_heading:
+            candidates.append(heading_ms)
         if self.new_paragraph:
-            return max(0, int(paragraph_ms))
-        return 0
+            candidates.append(paragraph_ms)
+        return max(0, max((int(value) for value in candidates), default=0))
 
 # Размер куска для обработки текста: достаточно, чтобы не дробить обращения к
 # ИИ-транслитератору на каждое предложение, и мало, чтобы не держать в памяти
@@ -85,7 +94,7 @@ def _is_heading(line: str) -> bool:
     stripped = line.strip()
     if not stripped or len(stripped) > 60:
         return False
-    if "," in stripped or "—" in stripped and len(stripped.split()) > 8:
+    if "," in stripped or ("—" in stripped and len(stripped.split()) > 8):
         return False
     if len(stripped.split()) > 8:
         return False
@@ -242,7 +251,7 @@ class TTSWorker(threading.Thread):
         return line.lstrip().startswith(("-", "–", "—"))
 
     @staticmethod
-    def split_into_quanta_typed(text: str, limit: int = SEGMENT_CHARS) -> list["Quantum"]:
+    def split_into_quanta_typed(text: str, limit: int = SEGMENT_CHARS) -> list[Quantum]:
         """Кванты с видом: предложение, заголовок, реплика диалога.
 
         Строка как квант плоха: в абзаце их несколько, и синтез получает обрывки
@@ -257,15 +266,18 @@ class TTSWorker(threading.Thread):
         """
         quanta: list[Quantum] = []
         buffer: list[str] = []
-        pending_paragraph = True   # следующий квант начинает абзац
+        pending_paragraph = True       # следующий квант начинает абзац
+        pending_after_heading = False   # следующий квант идёт после заголовка
 
         def emit(texts: list[str], kind: str, rest_kind: str = "sentence") -> None:
             """Добавить кванты; вид получает только первый — пауза нужна ему.
 
             Второе предложение реплики паузы перед собой не требует: оно
-            продолжает ту же прямую речь.
+            продолжает ту же прямую речь. Отметка «после заголовка» достаётся
+            ровно одному следующему кванту: тело главы начинается с него, и
+            дальше отделять от заголовка нечего.
             """
-            nonlocal pending_paragraph
+            nonlocal pending_paragraph, pending_after_heading
             for index, piece in enumerate(texts):
                 if not piece.strip():
                     continue
@@ -273,8 +285,12 @@ class TTSWorker(threading.Thread):
                     piece.strip(),
                     kind if index == 0 else rest_kind,
                     pending_paragraph,
+                    pending_after_heading,
                 ))
                 pending_paragraph = False
+                pending_after_heading = False
+            if kind == "heading":
+                pending_after_heading = True
 
         def split_piece(piece: str) -> list[str]:
             if len(piece) <= limit:
@@ -369,7 +385,7 @@ class TTSWorker(threading.Thread):
         engine: TTSEngine,
         text: str,
         config: ConfigManager,
-    ) -> Iterator["Quantum"]:
+    ) -> Iterator[Quantum]:
         """Кванты по всему тексту, с видом: воркеру нужны паузы по смыслу."""
         for chunk in TTSWorker.split_into_chunks(text):
             processed = TextProcessor.process_text(chunk, config)
@@ -395,7 +411,7 @@ class TTSWorker(threading.Thread):
 
     # ── Поток ────────────────────────────────────────────────────────────────
 
-    def _with_pause(self, audio, quantum: "Quantum"):
+    def _with_pause(self, audio, quantum: Quantum):
         """Добавить тишину перед квантом прямо в аудио.
 
         Пауза живёт внутри сегмента, а не в проигрывателе: тогда она слышна
@@ -405,6 +421,7 @@ class TTSWorker(threading.Thread):
         """
         pause_ms = quantum.pause_ms(
             getattr(self._config, "pause_dialogue_ms", 0),
+            getattr(self._config, "pause_heading_ms", 0),
             getattr(self._config, "pause_paragraph_ms", 0),
         )
         if pause_ms <= 0:
@@ -429,6 +446,10 @@ class TTSWorker(threading.Thread):
         try:
             chunks = self.split_into_chunks(self._text)
             print(f"[TTSWorker] Старт: {len(self._text)} символов, кусков {len(chunks)}", flush=True)
+            # Общее число квантов считаем заранее: генератор его не знает, а
+            # полосе прогресса нужен знаменатель. Плеер обрезает долю до 1.0,
+            # поэтому небольшое расхождение с фактическим числом не страшно.
+            total = self.count_quanta(self._text)
             index = 0
             for quantum in self.iter_quanta(self._engine, self._text, self._config):
                 if self._stop_event.is_set():
@@ -441,9 +462,9 @@ class TTSWorker(threading.Thread):
                     print("[TTSWorker] Остановлено при ожидании места в очереди", flush=True)
                     break
                 if self._on_progress:
-                    self._on_progress(index, len(segment))
+                    self._on_progress(index, total)
             print(f"[TTSWorker] Синтезировано сегментов: {index}", flush=True)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             print(f"[TTSWorker] Ошибка воркера TTS: {exc}", flush=True)
             if self._on_error:
                 self._on_error(str(exc))

@@ -7,22 +7,23 @@
 """
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import gi
 
-gi.require_version("Gdk", "3.0")
-gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "4.0")
+gi.require_version("Gtk", "4.0")
 
 from gi.repository import Gdk, Gtk  # noqa: E402
 
+from .. import i18n  # noqa: E402
 from ..config.config_manager import ConfigManager  # noqa: E402
-from .. import i18n
-from ..i18n import _
 from ..core.audio_player import SPEED_AVAILABLE  # noqa: E402
 from ..core.hotkey_listener import HotkeyListener  # noqa: E402
 from ..core.text_processor import TextProcessor  # noqa: E402
-from .theme_manager import ThemeManager, rgba, shift_color  # noqa: E402
+from ..i18n import _  # noqa: E402
+from .theme_manager import ThemeManager, rgba  # noqa: E402
+from .window_icon import apply_icon  # noqa: E402
 
 RESPONSE_RESET = 1
 
@@ -68,6 +69,35 @@ _SPECIAL_KEYNAMES = {
 }
 
 
+# Ширина экрана (логические пиксели), при которой задуманы размеры из CSS.
+# Ниже неё шрифт не уменьшаем: на маленьком экране 13 px мелко не выглядит.
+BASE_WIDTH = 1366
+
+
+def ui_scale() -> float:
+    """Во сколько раз крупнее делать шрифты и отступы на этом экране.
+
+    Размеры в CSS заданы в логических пикселях, а они одинаковы и на 1366,
+    и на 2560 — из-за этого на широком мониторе окно настроек выглядит мелким.
+    Считаем от ширины экрана; корень сглаживает рост: на 2560 это 1.37, а не
+    1.87, иначе надписи становятся несоразмерно крупными.
+
+    GTK сам умножает логические пиксели на scale-factor монитора, поэтому
+    HiDPI отдельно учитывать не нужно.
+    """
+    display = Gdk.Display.get_default()
+    if display is None:
+        return 1.0
+    monitors = display.get_monitors()
+    if monitors.get_n_items() == 0:
+        return 1.0
+    # В GDK4 «основного» монитора нет: берём первый из списка.
+    width = monitors.get_item(0).get_geometry().width
+    if width <= 0:
+        return 1.0
+    return max(1.0, min(1.8, (width / BASE_WIDTH) ** 0.5))
+
+
 def _keyval_to_pynput(keyval: int) -> str | None:
     """Имя клавиши в формате pynput (``a``, ``f5``, ``page_up``, ``<ctrl>``…)."""
     if keyval in _MODIFIER_KEYVALS:
@@ -104,7 +134,12 @@ def _modifiers_to_parts(state: Gdk.ModifierType) -> list[str]:
 
 
 class HotkeyCapture(Gtk.Button):
-    """Кнопка, которая по клику перехватывает нажатие и запоминает комбинацию."""
+    """Кнопка, которая по клику перехватывает нажатие и запоминает комбинацию.
+
+    Клавиши приходят контроллерами GTK4 (``Gtk.EventControllerKey``), а не
+    виртуальными методами окна: в GTK4 ``do_key_press_event`` больше нет, а
+    событие — не структура с полями, а аргументы сигнала.
+    """
 
     def __init__(self) -> None:
         super().__init__(label="")  # с текстом создаётся Gtk.Label-ребёнок
@@ -113,16 +148,25 @@ class HotkeyCapture(Gtk.Button):
         self._current_hotkey = ""
         self._draft = ""
         self._accent_color = "#6366f1"
+        self._css = Gtk.CssProvider()
+        self._provider_added = False
 
         self.set_can_focus(True)
-        self.set_relief(Gtk.ReliefStyle.NONE)
+        self.add_css_class("hotkey-capture")
         self.set_halign(Gtk.Align.FILL)
         self.get_child().set_xalign(0.0)
+        self.set_cursor(Gdk.Cursor.new_from_name("pointer", None))
 
-        cursor = Gdk.Cursor.new_from_name(self.get_display(), "pointer")
-        self.connect("realize", lambda w: w.get_window().set_cursor(cursor))
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self._on_key_pressed)
+        keys.connect("key-released", self._on_key_released)
+        self.add_controller(keys)
+
+        focus = Gtk.EventControllerFocus()
+        focus.connect("leave", lambda _c: self._on_focus_out())
+        self.add_controller(focus)
+
         self.connect("clicked", self._start_capture)
-        self.connect("focus-out-event", self._on_focus_out)
         self._update_style()
 
     # ── Внешний интерфейс ────────────────────────────────────────────────────
@@ -138,7 +182,7 @@ class HotkeyCapture(Gtk.Button):
         self.set_label(
             HotkeyListener.format_hotkey(self._current_hotkey)
             if self._current_hotkey
-            else "Кликните для выбора…"
+            else _("Кликните для выбора…")
         )
         self._update_style()
 
@@ -150,11 +194,11 @@ class HotkeyCapture(Gtk.Button):
     def _start_capture(self, *_args) -> None:
         self._capturing = True
         self._draft = ""
-        self.set_label("Нажмите новую клавишу…")
+        self.set_label(_("Нажмите новую клавишу…"))
         self._update_style()
         self.grab_focus()
 
-    def _on_focus_out(self, *_args) -> bool:
+    def _on_focus_out(self) -> bool:
         if self._capturing:
             self._cancel_capture()
         return False
@@ -165,7 +209,7 @@ class HotkeyCapture(Gtk.Button):
         self.set_label(
             HotkeyListener.format_hotkey(self._current_hotkey)
             if self._current_hotkey
-            else "Кликните для выбора…"
+            else _("Кликните для выбора…")
         )
         self._update_style()
 
@@ -174,36 +218,39 @@ class HotkeyCapture(Gtk.Button):
         if self.on_captured:
             self.on_captured(hotkey)
 
-    def do_key_press_event(self, event) -> bool:  # noqa: N802
+    def _on_key_pressed(self, _controller, keyval: int, _keycode: int,
+                        state: Gdk.ModifierType) -> bool:
         if not self._capturing:
-            return Gtk.Button.do_key_press_event(self, event)
+            return False
 
-        state = event.state & Gtk.accelerator_get_default_mod_mask()
-        parts = _modifiers_to_parts(state)
+        mods = state & Gtk.accelerator_get_default_mod_mask()
+        parts = _modifiers_to_parts(mods)
 
-        if event.keyval in _MODIFIER_KEYVALS:
-            # Нажали только модификатор: показываем черновик, решение — на отпускании.
-            mod = f"<{_MODIFIER_KEYVALS[event.keyval]}>"
+        if keyval in _MODIFIER_KEYVALS:
+            # Нажали только модификатор: показываем черновик, решение — на
+            # отпускании, когда станет ясно, что других клавиш не было.
+            mod = f"<{_MODIFIER_KEYVALS[keyval]}>"
             if mod not in parts:
                 parts.append(mod)
             self._draft = "+".join(parts)
             self.set_label(HotkeyListener.format_hotkey(self._draft) + "…")
             return True
 
-        key_name = _keyval_to_pynput(event.keyval)
+        key_name = _keyval_to_pynput(keyval)
         if key_name:
             parts.append(key_name)
             self._draft = ""
             self._commit("+".join(parts))
         return True
 
-    def do_key_release_event(self, event) -> bool:  # noqa: N802
+    def _on_key_released(self, _controller, keyval: int, _keycode: int,
+                         state: Gdk.ModifierType) -> bool:
         if not self._capturing:
-            return Gtk.Button.do_key_release_event(self, event)
+            return False
 
-        if event.keyval in _MODIFIER_KEYVALS and self._draft:
-            state = event.state & Gtk.accelerator_get_default_mod_mask()
-            if not state:  # отпустили последний модификатор — комбинация готова
+        if keyval in _MODIFIER_KEYVALS and self._draft:
+            mods = state & Gtk.accelerator_get_default_mod_mask()
+            if not mods:  # отпустили последний модификатор — комбинация готова
                 draft = self._draft
                 self._draft = ""
                 self._commit(draft)
@@ -213,16 +260,20 @@ class HotkeyCapture(Gtk.Button):
 
     def _update_style(self) -> None:
         accent = self._accent_color
+        # Кегль тот же, что у остальных надписей диалога, — иначе поле ввода
+        # комбинации выбивается из общего вида. Поле создаётся до диалога
+        # (внутри _build_ui), поэтому масштаб считаем сами.
+        font = max(13, round(13 * ui_scale()))
         if self._capturing:
             css = f"""
-            button {{
+            .hotkey-capture {{
                 background-image: none;
                 background-color: {rgba(accent, 0.2)};
                 color: #ffffff;
                 border: 2px solid {accent};
                 border-radius: 6px;
                 padding: 6px 10px;
-                font-size: 13px;
+                font-size: {font}px;
                 font-weight: bold;
                 box-shadow: none;
                 text-shadow: none;
@@ -230,30 +281,34 @@ class HotkeyCapture(Gtk.Button):
             """
         else:
             css = f"""
-            button {{
+            .hotkey-capture {{
                 background-image: none;
                 background-color: rgba(255, 255, 255, 0.06);
                 color: #ffffff;
                 border: 1px solid rgba(255, 255, 255, 0.15);
                 border-radius: 6px;
                 padding: 6px 10px;
-                font-size: 13px;
+                font-size: {font}px;
                 box-shadow: none;
                 text-shadow: none;
             }}
-            button:hover {{
+            .hotkey-capture:hover {{
                 background-color: rgba(255, 255, 255, 0.1);
                 border-color: {accent};
                 color: #ffffff;
             }}
-            button:focus {{
+            .hotkey-capture:focus {{
                 border-color: {accent};
                 color: #ffffff;
             }}
             """
-        provider = Gtk.CssProvider()
-        provider.load_from_data(css.encode("utf-8"))
-        self.get_style_context().add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        self._css.load_from_data(css.encode("utf-8"))
+        if self._provider_added is False:
+            # Провайдер добавляется контексту стиля кнопки: add_provider есть
+            # у StyleContext, а не у виджета.
+            self.get_style_context().add_provider(
+                self._css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+            self._provider_added = True
 
 
 class SettingsWindow(Gtk.Dialog):
@@ -284,9 +339,17 @@ class SettingsWindow(Gtk.Dialog):
 
         self.on_saved: Callable[[], None] | None = None
 
-        self.set_default_size(620, 500)
+        # Масштаб интерфейса считаем один раз: он зависит от экрана, а диалог
+        # модальный и живёт недолго.
+        self._ui_scale = ui_scale()
+        # Иконку ставим до показа: Gtk.Dialog своей не имеет и без этого
+        # показывает серую «шестерёнку» вместо значка приложения.
+        apply_icon(self, _("Настройки — Silero TTS Reader"))
+
+        self.set_default_size(round(620 * self._ui_scale),
+                              round(500 * self._ui_scale))
         self.set_resizable(False)
-        self.set_border_width(16)
+        self._content_margin = round(16 * self._ui_scale)
 
         if self._theme_manager:
             self._theme_manager.connect("theme-changed", lambda *_: self._apply_theme())
@@ -383,10 +446,10 @@ class SettingsWindow(Gtk.Dialog):
             scale trough {{ background-color: {border}; border-radius: 2px; min-height: 4px; }}
             scale highlight {{ background-color: {accent}; border-radius: 2px; }}
             scale slider {{ background-color: {accent}; border: none; border-radius: 6px; min-width: 12px; min-height: 12px; margin: -4px 0; }}
-            """.encode("utf-8")
+            """.encode()
         )
-        Gtk.StyleContext.add_provider_for_screen(
-            self.get_screen(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        Gtk.StyleContext.add_provider_for_display(
+            self.get_display(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
         )
         self._hint_color = muted
 
@@ -406,39 +469,48 @@ class SettingsWindow(Gtk.Dialog):
             ("Горячие клавиши", "Голос и аудио", "Внешний вид", "ИИ & Транслитерация")
         ):
             self._notebook.get_nth_page(index).set_tooltip_text(tip)
-        content.pack_start(self._notebook, True, True, 0)
+        content.append(self._notebook)
+        self._notebook.set_hexpand(True)
 
         button_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        content.pack_start(button_row, False, False, 0)
+        content.append(button_row)
 
         self._btn_reset = Gtk.Button(label=_("Сброс к умолчаниям"))
-        self._btn_reset.get_style_context().add_class("reset")
+        self._btn_reset.add_css_class("reset")
         self._btn_reset.connect("clicked", self._on_reset)
-        button_row.pack_start(self._btn_reset, False, False, 0)
-        button_row.pack_start(Gtk.Box(), True, True, 0)  # растяжка
+        button_row.append(self._btn_reset)
+        _spacer = Gtk.Box()
+        _spacer.set_hexpand(True)
+        button_row.append(_spacer)  # растяжка
 
         self._btn_cancel = Gtk.Button(label=_("Отмена"))
-        self._btn_cancel.get_style_context().add_class("secondary")
+        self._btn_cancel.add_css_class("secondary")
         self._btn_cancel.connect("clicked", lambda _b: self.response(Gtk.ResponseType.CANCEL))
-        button_row.pack_start(self._btn_cancel, False, False, 0)
+        button_row.append(self._btn_cancel)
 
         self._btn_save = Gtk.Button(label=_("Сохранить"))
         self._btn_save.connect("clicked", lambda _b: self.response(Gtk.ResponseType.OK))
-        button_row.pack_start(self._btn_save, False, False, 0)
+        button_row.append(self._btn_save)
 
-        self.show_all()
+        self.present()
 
     # ── Вкладка «Горячие клавиши» ────────────────────────────────────────────
 
     def _build_hotkeys_tab(self) -> Gtk.Widget:
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        page.set_border_width(12)
+        page.set_margin_top(12)
+        page.set_margin_bottom(12)
+        page.set_margin_start(12)
+        page.set_margin_end(12)
 
         group = Gtk.Frame(label=_("ГЛОБАЛЬНЫЕ ГОРЯЧИЕ КЛАВИШИ"))
         grid = Gtk.Grid(row_spacing=10, column_spacing=12)
-        grid.set_border_width(10)
-        group.add(grid)
-        page.pack_start(group, False, False, 0)
+        grid.set_margin_top(10)
+        grid.set_margin_bottom(10)
+        grid.set_margin_start(10)
+        grid.set_margin_end(10)
+        group.set_child(grid)
+        page.append(group)
 
         accent = self._theme_manager.accent_color() if self._theme_manager else "#6366f1"
 
@@ -472,41 +544,51 @@ class SettingsWindow(Gtk.Dialog):
                     "Работает только на X11 / XWayland.")
         )
         hint.set_xalign(0.0)
-        hint.set_line_wrap(True)
+        hint.set_wrap(True)
         hint.set_name("hint")
-        page.pack_start(hint, False, False, 0)
+        page.append(hint)
 
-        page.pack_start(Gtk.Box(), True, True, 0)
+        _spacer = Gtk.Box()
+
+        _spacer.set_hexpand(True)
+
+        page.append(_spacer)
         return page
 
     # ── Вкладка «Голос и аудио» ──────────────────────────────────────────────
 
     def _build_voice_tab(self) -> Gtk.Widget:
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        page.set_border_width(12)
+        page.set_margin_top(12)
+        page.set_margin_bottom(12)
+        page.set_margin_start(12)
+        page.set_margin_end(12)
 
         voice_group = Gtk.Frame(label=_("ГОЛОС"))
         voice_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        voice_box.set_border_width(10)
-        voice_group.add(voice_box)
-        page.pack_start(voice_group, False, False, 0)
+        voice_box.set_margin_top(10)
+        voice_box.set_margin_bottom(10)
+        voice_box.set_margin_start(10)
+        voice_box.set_margin_end(10)
+        voice_group.set_child(voice_box)
+        page.append(voice_group)
 
         # Язык модели: голоса у языков разные, выбирать их вперемешку нельзя
         lang_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        lang_row.pack_start(self._label(_("Язык:")), False, False, 0)
+        lang_row.append(self._label(_("Язык:")))
         self._voice_lang_combo = Gtk.ComboBoxText()
         for lang in self._voices_by_lang:
             self._voice_lang_combo.append_text(lang)
         self._voice_lang_combo.set_active(0)
         self._voice_lang_combo.connect("changed", lambda _c: self._reload_voices())
-        lang_row.pack_start(self._voice_lang_combo, False, False, 0)
-        voice_box.pack_start(lang_row, False, False, 0)
+        lang_row.append(self._voice_lang_combo)
+        voice_box.append(lang_row)
 
         # Поиск: у английской модели 119 голосов (en_0…en_117)
         self._voice_search = Gtk.Entry()
         self._voice_search.set_placeholder_text(_("Поиск голоса…"))
         self._voice_search.connect("changed", lambda _e: self._on_voice_search())
-        voice_box.pack_start(self._voice_search, False, False, 0)
+        voice_box.append(self._voice_search)
 
         self._voice_store = Gtk.ListStore(str)
         self._voice_filter = self._voice_store.filter_new()
@@ -519,62 +601,72 @@ class SettingsWindow(Gtk.Dialog):
         voice_scroll = Gtk.ScrolledWindow()
         voice_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         voice_scroll.set_min_content_height(120)
-        voice_scroll.add(self._voice_view)
-        voice_box.pack_start(voice_scroll, True, True, 0)
+        voice_scroll.set_child(self._voice_view)
+        voice_box.append(voice_scroll)
+        voice_scroll.set_hexpand(True)
 
         preview_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self._btn_preview = Gtk.Button(label=_("▶  Прослушать"))
         self._btn_preview.connect("clicked", self._on_preview)
-        preview_row.pack_start(self._btn_preview, False, False, 0)
+        preview_row.append(self._btn_preview)
         self._voice_count = Gtk.Label(label="")
-        preview_row.pack_start(self._voice_count, False, False, 0)
-        voice_box.pack_start(preview_row, False, False, 0)
+        preview_row.append(self._voice_count)
+        voice_box.append(preview_row)
 
         self._reload_voices()
 
         speed_group = Gtk.Frame(label=_("СКОРОСТЬ ВОСПРОИЗВЕДЕНИЯ ПО УМОЛЧАНИЮ"))
         speed_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        speed_row.set_border_width(10)
-        speed_group.add(speed_row)
-        page.pack_start(speed_group, False, False, 0)
+        speed_row.set_margin_top(10)
+        speed_row.set_margin_bottom(10)
+        speed_row.set_margin_start(10)
+        speed_row.set_margin_end(10)
+        speed_group.set_child(speed_row)
+        page.append(speed_group)
 
         self._speed_slider = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.5, 3.0, 0.25)
         self._speed_slider.set_draw_value(False)
         self._speed_slider.set_value(max(0.5, min(3.0, self._config.speed)))
         self._speed_slider.set_sensitive(SPEED_AVAILABLE)
         self._speed_slider.connect("value-changed", self._on_speed_slider)
-        speed_row.pack_start(self._speed_slider, True, True, 0)
+        speed_row.append(self._speed_slider)
+        self._speed_slider.set_hexpand(True)
 
         self._speed_label = Gtk.Label(label=f"{self._config.speed:.2g}×")
         self._speed_label.set_width_chars(4)
-        speed_row.pack_start(self._speed_label, False, False, 0)
+        speed_row.append(self._speed_label)
 
         if not SPEED_AVAILABLE:
             no_rb = Gtk.Label(label=_("(требуется rubberband-cli)"))
             no_rb.set_name("hint")
-            speed_row.pack_start(no_rb, False, False, 0)
+            speed_row.append(no_rb)
 
         # ── Паузы ────────────────────────────────────────────────────────────
         pause_group = Gtk.Frame(label=_("ПАУЗЫ"))
         pause_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        pause_box.set_border_width(10)
-        pause_group.add(pause_box)
-        page.pack_start(pause_group, False, False, 0)
+        pause_box.set_margin_top(10)
+        pause_box.set_margin_bottom(10)
+        pause_box.set_margin_start(10)
+        pause_box.set_margin_end(10)
+        pause_group.set_child(pause_box)
+        page.append(pause_group)
 
         def add_pause_row(title: str, hint: str, value: int, limit: int):
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
             label = Gtk.Label(label=title)
             label.set_xalign(0.0)
             label.set_tooltip_text(hint)
-            row.pack_start(label, False, False, 0)
-            row.pack_start(Gtk.Box(), True, True, 0)
+            row.append(label)
+            _spacer = Gtk.Box()
+            _spacer.set_hexpand(True)
+            row.append(_spacer)
             spin = Gtk.SpinButton.new_with_range(0, limit, 50)
             spin.set_value(value)
             spin.set_tooltip_text(hint)
             spin.set_width_chars(5)
-            row.pack_start(spin, False, False, 0)
-            row.pack_start(Gtk.Label(label=_("мс")), False, False, 0)
-            pause_box.pack_start(row, False, False, 0)
+            row.append(spin)
+            row.append(Gtk.Label(label=_("мс")))
+            pause_box.append(row)
             return spin
 
         self._pause_dialogue_spin = add_pause_row(
@@ -583,27 +675,43 @@ class SettingsWindow(Gtk.Dialog):
             self._config.pause_dialogue_ms,
             5000,
         )
+        self._pause_heading_spin = add_pause_row(
+            _("После заголовка главы:"),
+            _("Отделяет название главы от её текста"),
+            self._config.pause_heading_ms,
+            5000,
+        )
         self._pause_paragraph_spin = add_pause_row(
             _("Между абзацами:"),
-            _("Тишина на границе абзацев и перед заголовком главы"),
+            _("Тишина на границе абзацев внутри главы"),
             self._config.pause_paragraph_ms,
             5000,
         )
 
-        page.pack_start(Gtk.Box(), True, True, 0)
+        _spacer = Gtk.Box()
+
+        _spacer.set_hexpand(True)
+
+        page.append(_spacer)
         return page
 
     # ── Вкладка «Оформление» ─────────────────────────────────────────────────
 
     def _build_appearance_tab(self) -> Gtk.Widget:
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        page.set_border_width(12)
+        page.set_margin_top(12)
+        page.set_margin_bottom(12)
+        page.set_margin_start(12)
+        page.set_margin_end(12)
 
         group = Gtk.Frame(label=_("ОФОРМЛЕНИЕ И ТЕМА ИНТЕРФЕЙСА"))
         grid = Gtk.Grid(row_spacing=10, column_spacing=12)
-        grid.set_border_width(10)
-        group.add(grid)
-        page.pack_start(group, False, False, 0)
+        grid.set_margin_top(10)
+        grid.set_margin_bottom(10)
+        grid.set_margin_start(10)
+        grid.set_margin_end(10)
+        group.set_child(grid)
+        page.append(group)
 
         self._theme_combo = Gtk.ComboBoxText()
         for label, value in (
@@ -644,30 +752,40 @@ class SettingsWindow(Gtk.Dialog):
         self._accent_chk.connect("toggled", self._on_accent_toggled)
         grid.attach(self._accent_chk, 0, 2, 2, 1)
 
-        page.pack_start(Gtk.Box(), True, True, 0)
+        _spacer = Gtk.Box()
+
+        _spacer.set_hexpand(True)
+
+        page.append(_spacer)
         return page
 
     # ── Вкладка «ИИ и транслитерация» ────────────────────────────────────────
 
     def _build_ai_tab(self) -> Gtk.Widget:
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        page.set_border_width(12)
+        page.set_margin_top(12)
+        page.set_margin_bottom(12)
+        page.set_margin_start(12)
+        page.set_margin_end(12)
 
         trans_group = Gtk.Frame(label=_("ТРАНСЛИТЕРАЦИЯ"))
         trans_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        trans_box.set_border_width(10)
-        trans_group.add(trans_box)
-        page.pack_start(trans_group, False, False, 0)
+        trans_box.set_margin_top(10)
+        trans_box.set_margin_bottom(10)
+        trans_box.set_margin_start(10)
+        trans_box.set_margin_end(10)
+        trans_group.set_child(trans_box)
+        page.append(trans_group)
 
         self._chk_ignore_urls = Gtk.CheckButton(label=_("Игнорировать ссылки (http/https/www)"))
         self._chk_ignore_urls.set_active(self._config.ignore_urls)
-        trans_box.pack_start(self._chk_ignore_urls, False, False, 0)
+        trans_box.append(self._chk_ignore_urls)
 
         self._chk_transliterate = Gtk.CheckButton(
             label=_("Переписывать латинские/иностранные слова кириллицей")
         )
         self._chk_transliterate.set_active(self._config.transliteration_enabled)
-        trans_box.pack_start(self._chk_transliterate, False, False, 0)
+        trans_box.append(self._chk_transliterate)
 
         self._chk_use_llm = Gtk.CheckButton(
             label=_("Использовать ИИ (LLM) для фонетической транскрипции")
@@ -676,13 +794,16 @@ class SettingsWindow(Gtk.Dialog):
         self._chk_use_llm.connect(
             "toggled", lambda c: self._chk_transliterate.set_active(True) if c.get_active() else None
         )
-        trans_box.pack_start(self._chk_use_llm, False, False, 0)
+        trans_box.append(self._chk_use_llm)
 
         llm_group = Gtk.Frame(label=_("НАСТРОЙКИ ИИ-МОДЕЛИ (API)"))
         grid = Gtk.Grid(row_spacing=8, column_spacing=12)
-        grid.set_border_width(10)
-        llm_group.add(grid)
-        page.pack_start(llm_group, False, False, 0)
+        grid.set_margin_top(10)
+        grid.set_margin_bottom(10)
+        grid.set_margin_start(10)
+        grid.set_margin_end(10)
+        llm_group.set_child(grid)
+        page.append(llm_group)
 
         self._llm_provider_combo = Gtk.ComboBoxText()
         for label, value in (
@@ -727,7 +848,7 @@ class SettingsWindow(Gtk.Dialog):
         self._txt_system_prompt.set_tooltip_text(_("Системный промпт ИИ с правилом расстановки знака ударения '+'"))
         prompt_scroll = Gtk.ScrolledWindow()
         prompt_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        prompt_scroll.add(self._txt_system_prompt)
+        prompt_scroll.set_child(self._txt_system_prompt)
         grid.attach(self._label(_("Системный промпт ИИ:")), 0, 4, 1, 1)
         grid.attach(prompt_scroll, 1, 4, 1, 1)
 
@@ -740,11 +861,15 @@ class SettingsWindow(Gtk.Dialog):
                     "встроенный офлайн-фонетизатор.")
         )
         hint.set_xalign(0.0)
-        hint.set_line_wrap(True)
+        hint.set_wrap(True)
         hint.set_name("hint")
-        page.pack_start(hint, False, False, 0)
+        page.append(hint)
 
-        page.pack_start(Gtk.Box(), True, True, 0)
+        _spacer = Gtk.Box()
+
+        _spacer.set_hexpand(True)
+
+        page.append(_spacer)
         return page
 
     # ── Вспомогательное ──────────────────────────────────────────────────────
@@ -903,6 +1028,8 @@ class SettingsWindow(Gtk.Dialog):
         # Паузы
         if hasattr(self, "_pause_dialogue_spin"):
             self._config.pause_dialogue_ms = int(self._pause_dialogue_spin.get_value())
+        if hasattr(self, "_pause_heading_spin"):
+            self._config.pause_heading_ms = int(self._pause_heading_spin.get_value())
         if hasattr(self, "_pause_paragraph_spin"):
             self._config.pause_paragraph_ms = int(self._pause_paragraph_spin.get_value())
 

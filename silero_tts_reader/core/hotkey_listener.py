@@ -1,14 +1,14 @@
 """Global hotkey listener — evdev backend (Wayland) with pynput fallback (X11)."""
 from __future__ import annotations
 
-import os
+import contextlib
 import threading
-from typing import Callable
+from collections.abc import Callable
 
 # evdev key codes
 try:
-    from evdev import ecodes as ec
     import evdev
+    from evdev import ecodes as ec
     HAS_EVDEV = True
 except ImportError:
     HAS_EVDEV = False
@@ -164,10 +164,8 @@ class EvdevHotkeyListener(threading.Thread):
                     pass
 
         for d in devices:
-            try:
+            with contextlib.suppress(Exception):
                 d.close()
-            except Exception:
-                pass
 
     def _handle_key_event(self, code: int, value: int) -> None:
         with self._lock:
@@ -183,10 +181,12 @@ class EvdevHotkeyListener(threading.Thread):
                 self._check_combo_hotkeys(code)
 
             elif value == 0:
-                # Check single modifier hotkeys on RELEASE
-                if code in _MODIFIERS:
-                    if code not in self._dirty_single_modifiers and self._held_keys == {code}:
-                        self._check_single_mod_release(code)
+                # Одиночный модификатор срабатывает на ОТПУСКАНИИ, и только
+                # если его держали без других клавиш.
+                if (code in _MODIFIERS
+                        and code not in self._dirty_single_modifiers
+                        and self._held_keys == {code}):
+                    self._check_single_mod_release(code)
 
                 self._held_keys.discard(code)
                 if not (self._held_keys & _MODIFIERS):
@@ -404,11 +404,12 @@ class PynputHotkeyListener:
         key_name = self._get_key_name(key)
         mods = {"ctrl", "alt", "shift", "super"}
         with self._lock:
-            if key_name in mods:
-                if key_name not in self._dirty_single_modifiers and self._held_keys == {key_name}:
-                    for req_mods, trigger, callback in self._hotkeys:
-                        if trigger == key_name and req_mods[key_name] and sum(req_mods.values()) == 1:
-                            threading.Thread(target=callback, daemon=True).start()
+            if (key_name in mods
+                    and key_name not in self._dirty_single_modifiers
+                    and self._held_keys == {key_name}):
+                for req_mods, trigger, callback in self._hotkeys:
+                    if trigger == key_name and req_mods[key_name] and sum(req_mods.values()) == 1:
+                        threading.Thread(target=callback, daemon=True).start()
 
             self._held_keys.discard(key_name)
             if not (self._held_keys & mods):
@@ -499,9 +500,7 @@ class HotkeyListener:
         modifiers = {"ctrl", "alt", "shift", "super", "cmd"}
         for part in parts:
             part = part.strip()
-            if part.lower() in modifiers:
-                result.append(f"<{part.lower()}>")
-            elif part.lower() in _PYNPUT_SPECIAL_KEYS:
+            if part.lower() in modifiers or part.lower() in _PYNPUT_SPECIAL_KEYS:
                 result.append(f"<{part.lower()}>")
             else:
                 result.append(part.lower())

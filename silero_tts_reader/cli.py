@@ -27,10 +27,10 @@ import sys
 import wave
 from pathlib import Path
 
-from .config.config_manager import ConfigManager
 from . import i18n
-from .i18n import _
+from .config.config_manager import ConfigManager
 from .core import rate as rate_module
+from .i18n import _
 from .models import DEFAULT_LANG, MODELS, split_by_script
 
 MAX_CHARS = 20_000
@@ -121,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Импорт torch отложенный: без него CLI должен внятно сказать, чего не хватает.
     try:
-        import numpy as np  # noqa: F401
+        import numpy as np
         import torch  # noqa: F401
     except ImportError as exc:
         return _fail(
@@ -182,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
                 segments = engine.split_into_segments(text)
                 chunks = [engine.synthesize(segment, voice, language) for segment in segments]
                 audio = None
-    except Exception as exc:  # noqa: BLE001 — любое падение синтеза объясняем словами
+    except Exception as exc:
         print(loud.getvalue(), file=sys.stderr)
         return _fail(_("ошибка синтеза: {error}").format(error=exc))
 
@@ -196,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
             audio = rate_module.time_stretch(audio, engine.sample_rate, speed)
             print(_("silero-tts-speak: скорость {speed:.2f}×").format(
                 speed=speed), file=sys.stderr)
-        except Exception as exc:  # noqa: BLE001 — без rubberband говорим как есть
+        except Exception as exc:
             print(_("silero-tts-speak: скорость недоступна — {error}").format(
                 error=exc), file=sys.stderr)
 
@@ -211,12 +211,12 @@ def main(argv: list[str] | None = None) -> int:
             "нет sounddevice — нечем воспроизводить (sudo apt install python3-sounddevice) "
             "или используйте --wav-out"
         )
-    except Exception as exc:  # noqa: BLE001 — PortAudio без звукового сервера
+    except Exception as exc:
         return _fail(_("sounddevice не инициализируется: {error}").format(error=exc))
 
     try:
         _play(audio, engine.sample_rate)
-    except Exception as exc:  # noqa: BLE001 — нет звукового сервера или устройства
+    except Exception as exc:
         return _fail(_("не удалось воспроизвести: {error} (или используйте --wav-out)")
                      .format(error=exc))
     return 0
@@ -243,7 +243,7 @@ def _spd_percent_to_speed(percent: float) -> float:
     дальше речь либо неразборчива, либо обрывается на стыках сегментов.
     Значение приходит как float («0.00», «50.00»), поэтому округляем.
     """
-    percent = max(-100, min(100, int(round(float(percent)))))
+    percent = max(-100, min(100, round(float(percent))))
     if percent >= 0:
         return 1.0 + (percent / 100.0)      # 0 → 1.0, +100 → 2.0
     return 1.0 + (percent / 200.0)          # -100 → 0.5

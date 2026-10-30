@@ -4,7 +4,6 @@ from __future__ import annotations
 import subprocess
 import time
 from pathlib import Path
-from typing import Optional
 
 from ..i18n import _
 from . import fb2
@@ -22,7 +21,7 @@ class TextExtractor:
     MAX_CHARS = 10_000
     CLIPBOARD_RESTORE_DELAY = 0.15
 
-    def get_selected_text(self) -> Optional[str]:
+    def get_selected_text(self) -> str | None:
         """Get currently selected text from active window or primary selection."""
         # 1. Try PRIMARY selection (mouse highlight) first — very reliable on Wayland & X11
         primary = self._get_primary_selection()
@@ -48,7 +47,7 @@ class TextExtractor:
 
         return saved.strip() if (saved and saved.strip()) else None
 
-    def get_clipboard_text(self) -> Optional[str]:
+    def get_clipboard_text(self) -> str | None:
         """Get current textual content of the clipboard (Wayland + X11)."""
         # Try wl-paste first (Wayland)
         try:
@@ -163,7 +162,7 @@ class TextExtractor:
         except Exception:
             pass
 
-    def _get_primary_selection(self) -> Optional[str]:
+    def _get_primary_selection(self) -> str | None:
         """Read PRIMARY selection (mouse highlight)."""
         # Try wl-paste --primary first (Wayland)
         try:

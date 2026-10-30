@@ -3,13 +3,12 @@ from __future__ import annotations
 
 import queue
 import threading
-from typing import Callable
+from collections.abc import Callable
 
 import numpy as np
 
 from . import rate as rate_module
 from .tts_worker import TTSWorker
-
 
 # Скорость меняет rubberband-cli: он в зависимостях пакета, а Python-обёртка
 # pyrubberband в архиве Ubuntu отсутствует. Раньше требовались оба, поэтому в
@@ -33,7 +32,7 @@ def _sd():
     """
     global _sounddevice
     if _sounddevice is None:
-        import sounddevice  # noqa: PLC0415
+        import sounddevice
         _sounddevice = sounddevice
     return _sounddevice
 
@@ -145,7 +144,7 @@ class AudioPlayer(threading.Thread):
 
         try:
             self._run_loop_locked(started, first)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             # Поток звука не должен умирать молча: без этого сообщения
             # приложение просто перестаёт говорить, и причину не видно ни в
             # журнале, ни в интерфейсе.

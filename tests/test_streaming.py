@@ -8,17 +8,17 @@
 from __future__ import annotations
 
 import queue
-
-import numpy as np
 import sys
 import threading
 import time
 from pathlib import Path
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from silero_tts_reader.core import tts_worker  # noqa: E402
-from silero_tts_reader.core.tts_worker import TTSWorker  # noqa: E402
+from silero_tts_reader.core import tts_worker
+from silero_tts_reader.core.tts_worker import TTSWorker
 
 CHECKS = 0
 
@@ -70,10 +70,18 @@ class FakeEngine:
 
 
 def make_config():
-    """Настройки как у приложения, но без обращения к ИИ-транслитератору."""
+    """Настройки по умолчанию — не из файла того, кто запустил тест.
+
+    Путь указывает на несуществующий файл: иначе тест читает боевые настройки
+    (паузы 1000/1500/300 у автора) и ожидания в тесте перестают что-либо
+    значить. Плюс транслитерация через ИИ выключена — сети в тестах нет.
+    """
+    import tempfile
+    from pathlib import Path
+
     from silero_tts_reader.config.config_manager import ConfigManager
 
-    config = ConfigManager()
+    config = ConfigManager(path=Path(tempfile.gettempdir()) / "silero-tts-test-none.json")
     config.set("transliteration_use_llm", False)
     return config
 
@@ -212,9 +220,17 @@ def test_pauses() -> None:
     check(quanta[1].kind == "dialogue", "реплика — отдельный квант диалога")
     check(quanta[1].new_paragraph, "реплика начинает абзац")
     check(quanta[2].new_paragraph, "обычный абзац начинается с паузы")
-    check(quanta[1].pause_ms(700, 400) == 700, "перед репликой — пауза диалога")
-    check(quanta[2].pause_ms(700, 400) == 400, "между абзацами — пауза абзаца")
-    check(quanta[0].pause_ms(700, 400) == 400, "перед заголовком — пауза абзаца")
+    # Паузы задаются тремя числами и НЕ складываются: берётся самая длинная из
+    # подходящих. Реплика сразу после заголовка подходит под две (заголовок и
+    # диалог), и суммарные 1500 мс звучали бы как провал, а не как пауза.
+    check(quanta[0].pause_ms(700, 800, 400) == 400,
+          "перед заголовком — пауза абзаца")
+    check(quanta[1].pause_ms(700, 800, 400) == 800,
+          "после заголовка с репликой берётся длинная из двух (800), а не сумма")
+    check(quanta[1].pause_ms(900, 800, 400) == 900,
+          "если пауза диалога длиннее, побеждает она — правило «самая длинная»")
+    check(quanta[2].pause_ms(700, 800, 400) == 400,
+          "между абзацами — пауза абзаца")
 
     # второе предложение реплики паузы перед собой не требует
     multi = TTSWorker.split_into_quanta_typed("- Привет. Как дела?")
@@ -245,11 +261,16 @@ def test_pauses() -> None:
 
     check(len(sizes) == 3, f"три сегмента: {sizes}")
     check(sizes[0] == 4800 + 19200, f"перед заголовком 400 мс тишины: {sizes[0]}")
-    check(sizes[1] == 4800 + 33600, f"перед репликой 700 мс тишины: {sizes[1]}")
+    # Реплика идёт сразу после заголовка, поэтому подходит под две паузы, и
+    # по правилу «самая длинная» берётся пауза заголовка (800), а не диалога (700).
+    check(sizes[1] == 4800 + 38400,
+          f"перед репликой после заголовка 800 мс тишины: {sizes[1]}")
     check(sizes[2] == 4800 + 19200, f"перед абзацем 400 мс тишины: {sizes[2]}")
 
-    # нулевая настройка отключает паузу
+    # нулевая настройка отключает паузу — все три: пауз три, и оставить одну
+    # ненулевой значит проверять не «выключено», а «выключено частично»
     config.pause_dialogue_ms = 0
+    config.pause_heading_ms = 0
     config.pause_paragraph_ms = 0
     engine2 = FakeEngine(length=4800)
     q2: queue.Queue = queue.Queue()
@@ -333,6 +354,37 @@ def test_done_sentinel() -> None:
     check(not worker2.is_alive(), "остановка при полной очереди завершает поток")
 
 
+def test_progress() -> None:
+    """Прогресс доходит до интерфейса: номер кванта и общее число.
+
+    Без этой проверки ошибка в отчёте о прогрессе видна только в работе:
+    исключение в обработчике попадает в общий except воркера, синтез молча
+    останавливается, а пользователь видит «Ошибка воркера TTS».
+    """
+    print("\n8. Прогресс: номер кванта и общее число")
+    text = "Первое предложение. Второе предложение. Третье предложение. Четвёртое."
+    seen: list[tuple[int, int]] = []
+    errors: list[str] = []
+
+    worker = TTSWorker(
+        FakeEngine(), text, {"ru": "xenia"}, make_config(),  # type: ignore[arg-type]
+        queue.Queue(), threading.Event(),
+        on_error=errors.append,
+        on_progress=lambda index, total: seen.append((index, total)),
+    )
+    worker.start()
+    worker.join(timeout=15)
+
+    expected_total = TTSWorker.count_quanta(text)
+    check(not errors, f"воркер не сообщил об ошибке: {errors}")
+    check(len(seen) == expected_total,
+          f"прогресс пришёл на каждый квант: {len(seen)} из {expected_total}")
+    check([index for index, _ in seen] == list(range(1, expected_total + 1)),
+          f"номера идут по порядку: {[index for index, _ in seen]}")
+    check(all(total == expected_total for _, total in seen),
+          f"общее число одинаково во всех отчётах: {expected_total}")
+
+
 def main() -> int:
     print("Потоковая подача текста")
     test_chapters()
@@ -341,6 +393,7 @@ def main() -> int:
     test_pauses()
     test_backpressure()
     test_done_sentinel()
+    test_progress()
     print(f"\nвсе проверки пройдены: {CHECKS}")
     return 0
 

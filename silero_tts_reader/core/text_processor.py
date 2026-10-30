@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import json
 import re
-import urllib.request
 import urllib.error
+import urllib.request
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -128,7 +128,8 @@ def _num_to_ru_phrase(val: int) -> str:
     return " ".join(parts).strip()
 
 
-from ..i18n import _
+from ..i18n import _  # noqa: E402
+
 
 class TextProcessor:
     """Handles text preprocessing, LLM API phonetization, and rule-based transliteration."""

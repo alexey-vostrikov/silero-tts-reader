@@ -8,8 +8,8 @@
 from __future__ import annotations
 
 import ast
-import re
 import pathlib
+import re
 import sys
 
 PKG = pathlib.Path(__file__).resolve().parent.parent / "silero_tts_reader"

@@ -1,9 +1,38 @@
 #!/usr/bin/env python3
 """Launcher — auto-activates .venv if present, then starts the application."""
-import sys
+import contextlib
 import os
-import warnings
+import sys
 from pathlib import Path
+
+
+def _ensure_layer_shell_preload() -> None:
+    """Перезапустить процесс с LD_PRELOAD, чтобы заработал layer-shell.
+
+    Библиотека ``libgtk4-layer-shell`` перехватывает создание поверхности
+    Wayland; при загрузке через ctypes перехват не встаёт, и протокол молча не
+    работает (окно остаётся там, куда его положит композитор). Перезапуск
+    делает только Wayland-сессия и только один раз.
+    """
+    if not os.environ.get("WAYLAND_DISPLAY"):
+        return
+    marker = "SILERO_LAYER_SHELL_PRELOADED"
+    if os.environ.get(marker):
+        return
+    for folder in ("/usr/lib/x86_64-linux-gnu", "/usr/lib", "/usr/lib64"):
+        library = os.path.join(folder, "libgtk4-layer-shell.so.0")
+        if os.path.exists(library):
+            break
+    else:
+        return
+
+    env = dict(os.environ)
+    env["LD_PRELOAD"] = f"{library} {env.get('LD_PRELOAD', '')}".strip()
+    env[marker] = library
+    try:
+        os.execve(sys.executable, [sys.executable, *sys.argv], env)
+    except OSError:
+        return  # без перезапуска работаем как есть, без протокола
 
 
 def _activate_venv() -> None:
@@ -57,10 +86,8 @@ def _suppress_noise() -> None:
 
     # Only wrap if stderr is a real TTY (don't break pipes/redirects)
     if hasattr(sys.stderr, "buffer"):
-        try:
+        with contextlib.suppress(Exception):
             sys.stderr = _XlibFilter(sys.stderr.buffer, line_buffering=True)
-        except Exception:
-            pass
 
 
 _activate_venv()
@@ -69,6 +96,8 @@ _suppress_noise()
 sys.path.insert(0, str(Path(__file__).parent.resolve()))
 
 from silero_tts_reader.__main__ import main  # noqa: E402
+
+_ensure_layer_shell_preload()
 
 if __name__ == "__main__":
     main()

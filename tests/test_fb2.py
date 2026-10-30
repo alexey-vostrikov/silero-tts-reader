@@ -23,13 +23,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from silero_tts_reader import i18n  # noqa: E402
-from silero_tts_reader.core import fb2  # noqa: E402
+from silero_tts_reader import i18n
+from silero_tts_reader.core import fb2
 
 # Тексты сообщений проверяются по-русски: язык задаём явно,
 # иначе результат зависит от LANG в окружении.
 i18n.init("ru_RU")
-from silero_tts_reader.core.text_extractor import TextExtractor  # noqa: E402
+from silero_tts_reader.core.text_extractor import TextExtractor
 
 CHECKS = 0
 

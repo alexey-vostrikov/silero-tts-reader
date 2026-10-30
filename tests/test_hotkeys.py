@@ -15,10 +15,11 @@ from __future__ import annotations
 import sys
 import types
 from pathlib import Path
+from typing import ClassVar
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from silero_tts_reader.core import hotkey_listener as hl  # noqa: E402
+from silero_tts_reader.core import hotkey_listener as hl
 
 CHECKS = 0
 
@@ -34,7 +35,7 @@ def check(condition: bool, message: str) -> None:
 class _StubListener:
     """Пустышка вместо настоящего pynput.Listener."""
 
-    instances: list["_StubListener"] = []
+    instances: ClassVar[list[_StubListener]] = []
 
     def __init__(self, **kwargs) -> None:
         self.kwargs = kwargs

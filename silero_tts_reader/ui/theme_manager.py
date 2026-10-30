@@ -11,10 +11,9 @@ Gtk не запрашивается: ``gi.require_version`` упал бы, ес�
 from __future__ import annotations
 
 import subprocess
+from typing import ClassVar
 
-import gi
-
-from gi.repository import Gio, GLib, GObject  # noqa: E402
+from gi.repository import Gio, GLib, GObject
 
 DEFAULT_ACCENT = "#6366f1"
 
@@ -164,7 +163,8 @@ def _gsettings_get(key: str) -> str:
 class ThemeManager(GObject.GObject):
     """Разрешение темы (система/тёмная/светлая), акцентный цвет и уведомления об изменении."""
 
-    __gsignals__ = {
+    # ClassVar: это описание сигналов GObject, а не значение экземпляра.
+    __gsignals__: ClassVar[dict[str, tuple]] = {
         # RUN_FIRST, тип возврата None, аргументы (is_dark: bool)
         "theme-changed": (GObject.SignalFlags.RUN_FIRST, None, (bool,)),
         "accent-changed": (GObject.SignalFlags.RUN_FIRST, None, ()),

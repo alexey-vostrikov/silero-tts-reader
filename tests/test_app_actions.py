@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from silero_tts_reader import i18n  # noqa: E402
+from silero_tts_reader import i18n
 
 # Тексты сообщений проверяются по-русски: язык задаём явно,
 # иначе результат зависит от LANG в окружении.
@@ -21,8 +21,8 @@ i18n.init("ru_RU")
 
 import gi
 
-gi.require_version("Gtk", "3.0")
-from gi.repository import Gio, Gtk  # noqa: E402
+gi.require_version("Gtk", "4.0")
+from gi.repository import Gio
 
 CHECKS = 0
 
@@ -47,9 +47,26 @@ def count_menu_items(menu: Gio.Menu) -> int:
 
 
 def accel_matches(app, action: str, wanted: str) -> bool:
-    """GTK нормализует <Control> в <Primary> — сравниваем без этого различия."""
-    wanted_norm = wanted.replace("<Control>", "<Primary>")
-    return wanted_norm in app.get_accels_for_action(action)
+    """Сравнить сочетание, не завися от написания модификатора.
+
+    GTK4 возвращает «<Control>», GTK3 — «<Primary>»; смысл один, поэтому
+    приводим обе стороны к одному виду, а не подгоняем ожидание под версию.
+    """
+    def norm(text: str) -> tuple:
+        """«<Shift><Control>c» → ({control, shift}, «c»).
+
+        Порядок модификаторов в строке не задан стандартом: GTK3 пишет
+        Control первым, GTK4 — Shift. Смысл один, поэтому сравниваем набор.
+        """
+        text = text.replace("<Primary>", "<Control>")
+        mods, key = set(), text
+        while key.startswith("<"):
+            close = key.index(">")
+            mods.add(key[1:close].lower())
+            key = key[close + 1:]
+        return (frozenset(mods), key.lower())
+
+    return norm(wanted) in [norm(item) for item in app.get_accels_for_action(action)]
 
 
 def test_actions(app) -> None:
