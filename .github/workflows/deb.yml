@@ -71,7 +71,8 @@ jobs:
       - name: Headless GTK tests
         run: |
           DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-            python3-gi gir1.2-gtk-3.0 gir1.2-glib-2.0 python3-numpy xvfb rubberband-cli
+            python3-gi gir1.2-gtk-4.0 gir1.2-glib-2.0 python3-numpy python3-xlib \
+            libgtk4-layer-shell0 xvfb rubberband-cli dbus-daemon
           xvfb-run -a python3 tests/smoke_gtk.py
 
       - name: Unit tests
@@ -101,7 +102,14 @@ jobs:
           # Потоковая подача: границы глав, обратное давление, остановка
           python3 tests/test_streaming.py
           # Проигрывание: один поток вывода, пауза между фразами, общий прогресс
-          python3 tests/test_playback.py
+          xvfb-run -a python3 tests/test_playback.py
+          # Позиционирование окна: решения при отсутствии протокола и монитор по номеру
+          python3 tests/test_layer_shell.py
+          # Значок в лотке: регистрация, свойства, раскладка меню, нажатия.
+          # Служба лотка подменена заглушкой на отдельной шине.
+          dbus-run-session -- python3 tests/test_sni_tray.py
+          # Значок окна: согласие app-id с .desktop и установка иконки
+          xvfb-run -a python3 tests/test_window_icon.py
           # Локализация: каталог свежий, все строки переведены, ни одна не забыта
           python3 packaging/i18n-build.py
           python3 packaging/i18n-audit.py
@@ -176,12 +184,15 @@ jobs:
             ./usr/share/doc/silero-tts-common/copyright
           check dist/silero-tts-reader_*.deb \
             ./usr/bin/silero-tts-reader \
-            ./usr/share/applications/silero-tts-reader.desktop \
+            ./usr/share/applications/ru.skala.silero-tts-reader.desktop \
             ./usr/share/icons/hicolor/256x256/apps/silero-tts-reader.png \
             ./usr/share/pixmaps/silero-tts-reader.png \
             ./usr/lib/silero-tts/run.py \
             ./usr/lib/silero-tts/silero_tts_reader/app.py \
             ./usr/lib/silero-tts/silero_tts_reader/ui/playback_widget.py \
+            ./usr/lib/silero-tts/silero_tts_reader/ui/layer_shell.py \
+            ./usr/lib/silero-tts/silero_tts_reader/ui/sni_tray.py \
+            ./usr/lib/silero-tts/silero_tts_reader/ui/window_icon.py \
             ./usr/lib/systemd/user/silero-tts-reader.service
           check dist/silero-tts-speechd_*.deb \
             ./usr/bin/silero-tts-speak \
@@ -207,8 +218,8 @@ jobs:
           # Ставим ровно то, что перечислено в Depends: если пакет добавит
           # зависимость, которой здесь нет, dpkg -i ниже упадёт.
           DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-            python3-gi gir1.2-glib-2.0 gir1.2-gtk-3.0 python3-numpy python3-scipy \
-            gir1.2-ayatanaappindicator3-0.1 rubberband-cli speech-dispatcher
+            python3-gi gir1.2-glib-2.0 gir1.2-gtk-4.0 python3-numpy python3-scipy \
+            python3-xlib libgtk4-layer-shell0 rubberband-cli speech-dispatcher
 
           # Без --force-depends: пакеты обязаны ставиться на чистой системе,
           # все их Depends должны быть доступны в архиве Ubuntu.
@@ -220,13 +231,18 @@ jobs:
           test -x /usr/bin/silero-tts-speechd
           test -f /etc/speech-dispatcher/modules/silero-tts.conf
 
-          # Зависимости трея и управления скоростью должны быть рабочими
+          # Зависимости трея и управления скоростью должны быть рабочими.
+          # Значок отдаётся по D-Bus (StatusNotifierItem), поэтому проверяем
+          # модуль значка и запасной путь для X11, а не привязку AppIndicator.
           python3 - <<'PY'
           import gi
-          gi.require_version("AyatanaAppIndicator3", "0.1")
-          from gi.repository import AyatanaAppIndicator3  # noqa: F401
-          print("  ✓ индикатор трея доступен (gir1.2-ayatanaappindicator3-0.1)")
+          gi.require_version("Gio", "2.0")
+          from gi.repository import Gio  # noqa: F401
+          from silero_tts_reader.ui import layer_shell, sni_tray  # noqa: F401
+          print("  ✓ значок трея: StatusNotifierItem по D-Bus")
+          print(f"  ✓ layer-shell: {layer_shell.reason()}")
           PY
+          python3 -c "from Xlib import display; print('  ✓ python-xlib для X11 на месте')"
           command -v rubberband >/dev/null
           echo "  ✓ rubberband-cli на месте: $(rubberband --version 2>&1 | head -1)"
 
@@ -235,7 +251,7 @@ jobs:
           ( cd / && PYTHONPATH=/usr/lib/silero-tts python3 - <<'PY'
           import pathlib
           import silero_tts_reader
-          from silero_tts_reader.ui import theme_manager, tray_icon
+          from silero_tts_reader.ui import layer_shell, sni_tray, theme_manager, window_icon
           from silero_tts_reader.core import tts_engine
           from silero_tts_reader import cli
           print("  ✓ модули импортируются из установленного дерева:", theme_manager.__file__)
@@ -245,7 +261,7 @@ jobs:
               "/usr/bin/silero-tts-reader",
               "/usr/bin/silero-tts-speak",
               "/usr/bin/silero-tts-speechd",
-              "/usr/share/applications/silero-tts-reader.desktop",
+              "/usr/share/applications/ru.skala.silero-tts-reader.desktop",
               "/usr/share/icons/hicolor/128x128/apps/silero-tts-reader.png",
               "/usr/lib/systemd/user/silero-tts-reader.service",
               "/etc/speech-dispatcher/modules/silero-tts.conf",
@@ -257,10 +273,11 @@ jobs:
 
           xvfb-run -a python3 - <<'PY'
           import gi
-          gi.require_version("Gtk", "3.0")
+          gi.require_version("Gtk", "4.0")
           from gi.repository import Gtk
-          ok, _ = Gtk.init_check(None)
-          print("  ✓ GTK инициализируется в установленной системе:", ok)
+          ok = Gtk.init_check()
+          print("  ✓ GTK4 инициализируется в установленной системе:", ok)
+          assert ok
           PY
 
           # Запускатор обязан внятно сказать про отсутствующие pip-модули

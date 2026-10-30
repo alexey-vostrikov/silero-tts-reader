@@ -5,12 +5,12 @@ build-backend = "setuptools.backends.legacy:build"
 [project]
 name = "silero-tts-reader"
 version = "2.0.0"
-description = "Text-to-speech reader using Silero TTS with global hotkeys and system tray (GTK3 / PyGObject)"
+description = "Text-to-speech reader using Silero TTS with global hotkeys and system tray (GTK4 / PyGObject)"
 readme = "README.md"
 requires-python = ">=3.10"
 # PyGObject (gi) НЕ в pip-зависимостях: он требует системных заголовков GTK и
-# ставится пакетом дистрибутива (python3-gi, gir1.2-gtk-3.0). Проверка при запуске:
-#   python3 -c "import gi; gi.require_version('Gtk','3.0')"
+# ставится пакетом дистрибутива (python3-gi, gir1.2-gtk-4.0). Проверка при запуске:
+#   python3 -c "import gi; gi.require_version('Gtk','4.0')"
 dependencies = [
     "pynput>=1.7.6",
     "sounddevice>=0.4.6",
