@@ -39,7 +39,13 @@ jobs:
       - name: Build dependencies
         run: |
           DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-            python3 python3-pil
+            python3 python3-pil gettext   # msgfmt: без него не собрать переводы
+
+            # Каталог переводов — артефакт сборки: в git его нет, а checkout
+            # вычищает неотслеживаемое. Собираем заранее, иначе и тесты, и
+            # пакет остались бы без локализации.
+            python3 packaging/i18n-wrap.py
+            python3 packaging/i18n-build.py
 
       - name: Check git metadata
         run: |
@@ -73,6 +79,22 @@ jobs:
           # Скорость: растяжение через rubberband-cli и шкала speech-dispatcher.
           # rubberband-cli поставлен выше, поэтому проверяется настоящая работа.
           python3 tests/test_rate.py
+          # Языки интерфейса: en_US через каталог gettext, ru_RU — исходный текст
+          python3 tests/test_i18n.py
+          # Один экземпляр: замена устаревшей сборки, действия и открытие файлов
+          python3 tests/test_instance.py
+          # Действия приложения требуют GTK: в CI дисплея нет, поэтому Xvfb
+          xvfb-run -a python3 tests/test_app_actions.py
+          # Книги FB2: все контейнеры, кодировки, LZ4, ошибки
+          python3 tests/test_fb2.py
+          # Потоковая подача: границы глав, обратное давление, остановка
+          python3 tests/test_streaming.py
+          # Локализация: каталог свежий, все строки переведены, ни одна не забыта
+          python3 packaging/i18n-build.py
+          python3 packaging/i18n-audit.py
+          # Те же тесты в английской локали: тексты не должны зависеть от LANG
+          LANGUAGE=en_US.UTF-8 LANG=en_US.UTF-8 python3 tests/test_fb2.py
+          LANGUAGE=en_US.UTF-8 LANG=en_US.UTF-8 xvfb-run -a python3 tests/test_app_actions.py
 
       - name: Build packages
         id: build
@@ -132,6 +154,12 @@ jobs:
             ./usr/lib/silero-tts/silero_tts_reader/config/config_manager.py \
             ./usr/lib/silero-tts/silero_tts_reader/core/tts_engine.py \
             ./usr/lib/silero-tts/silero_tts_reader/core/rate.py \
+            ./usr/lib/silero-tts/silero_tts_reader/i18n.py \
+            ./usr/lib/silero-tts/silero_tts_reader/build_info.py \
+            ./usr/lib/silero-tts/silero_tts_reader/instance.py \
+            ./usr/lib/silero-tts/silero_tts_reader/core/fb2.py \
+            ./usr/lib/silero-tts/build-info.json \
+            ./usr/share/locale/en_US/LC_MESSAGES/silero-tts-reader.mo \
             ./usr/share/doc/silero-tts-common/copyright
           check dist/silero-tts-reader_*.deb \
             ./usr/bin/silero-tts-reader \
@@ -233,6 +261,31 @@ jobs:
           printf '%s' "$out" | grep -q "не хватает Python-модулей"
           printf '%s' "$out" | grep -q "sounddevice"
           echo "  ✓ запускатор сообщает об отсутствующих модулях и подсказывает установку"
+
+          # Переводы: каталог на месте и применяется.
+          #
+          # Некоторые образы (в том числе образ act) содержат
+          # path-exclude=/usr/share/locale/*/LC_MESSAGES/*.mo: dpkg тогда честно
+          # ставит пакет, но файл перевода не распаковывает. Это свойство
+          # образа, а не пакета, поэтому проверку пропускаем с явным сообщением,
+          # а на настоящем раннере проверяем по-настоящему.
+          mo=/usr/share/locale/en_US/LC_MESSAGES/silero-tts-reader.mo
+          test -f "$mo" || dpkg -L silero-tts-common | grep -qx "$mo" \
+            || { echo "пакет не содержит перевода"; exit 1; }
+          if grep -rqs "path-exclude=/usr/share/locale" /etc/dpkg/dpkg.cfg.d/; then
+            echo "  ⚠ образ исключает распаковку .mo (dpkg path-exclude) — проверка в системе пропущена"
+          else
+            test -f "$mo" || { echo "перевод не установился: $mo"; exit 1; }
+            ( cd / && PYTHONPATH=/usr/lib/silero-tts python3 - <<'PY'
+          from silero_tts_reader import i18n
+          i18n.init("en_US")
+          assert i18n._("Текст не выделен") == "No text selected", i18n._("Текст не выделен")
+          i18n.init("ru_RU")
+          assert i18n._("Текст не выделен") == "Текст не выделен"
+          print("  ✓ переводы en_US и ru_RU работают в установленной системе")
+          PY
+            )
+          fi
 
           # Загрузчик моделей: каталог должен читаться без torch и без сети
           silero-tts-model list | tee /tmp/models.txt
