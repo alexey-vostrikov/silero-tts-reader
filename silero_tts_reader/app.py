@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import queue
+import signal
 import threading
 import traceback
 from typing import Callable, Optional
@@ -23,7 +24,10 @@ gi.require_version("Gtk", "3.0")
 
 from gi.repository import Gio, GLib, Gtk  # noqa: E402
 
+from . import build_info, instance  # noqa: E402
 from .config.config_manager import ConfigManager  # noqa: E402
+from . import i18n
+from .i18n import _
 from .core.audio_player import AudioPlayer  # noqa: E402
 from .core.hotkey_listener import HotkeyListener  # noqa: E402
 from .core.text_extractor import TextExtractor  # noqa: E402
@@ -36,21 +40,32 @@ from .ui.theme_manager import ThemeManager  # noqa: E402
 from .ui.tray_icon import TrayIcon, icon_path  # noqa: E402
 
 APP_ID = "ru.skala.silero-tts-reader"
+
+# Сколько сегментов держим готовыми к воспроизведению. Ограничение даёт
+# обратное давление: синтез не убегает вперёд и не держит в памяти всю книгу
+# (у большой книги это часы звука), а идёт в темпе проигрывания.
+AUDIO_QUEUE_SIZE = 6
 APP_NAME = "Silero TTS Reader"
 APP_VERSION = "1.0.0"
 
-RESPONSE_SPEAK_ALL = 10
-RESPONSE_TRIM = 11
 
 
 class Application(Gtk.Application):
     """Приложение целиком: конфиг, движок, плеер, трей и настройки."""
 
     def __init__(self, argv: list[str]) -> None:
-        super().__init__(application_id=APP_ID)
+        # HANDLES_OPEN: `silero-tts-reader текст.txt`, «Открыть с помощью» и
+        # перетаскивание файла на иконку приходят в do_open, а не в activate.
+        super().__init__(
+            application_id=APP_ID,
+            flags=Gio.ApplicationFlags.HANDLES_OPEN,
+        )
         self._argv = list(argv)
+        self._initialized = False
 
         self._config = ConfigManager()
+        # Язык интерфейса поднимаем до любых строк: _() ниже опирается на него.
+        i18n.init(self._config.ui_language)
         self._extractor = TextExtractor()
         self._engine = TTSEngine(
             sample_rate=self._config.sample_rate,
@@ -60,7 +75,7 @@ class Application(Gtk.Application):
         self._stop_event = threading.Event()
         self._player: Optional[AudioPlayer] = None
         self._worker: Optional[TTSWorker] = None
-        self._audio_queue: queue.Queue = queue.Queue()
+        self._audio_queue: queue.Queue = queue.Queue(maxsize=AUDIO_QUEUE_SIZE)
 
         self._theme_manager: Optional[ThemeManager] = None
         self._widget: Optional[PlaybackWidget] = None
@@ -73,14 +88,33 @@ class Application(Gtk.Application):
     def do_startup(self) -> None:
         Gtk.Application.do_startup(self)
         self.hold()  # приложение живёт в трее, а не окном
+        self._setup_actions()
 
     def do_activate(self) -> None:
         Gtk.Application.do_activate(self)
+
+        # Второй запуск не должен создавать второй трей, вторую копию модели и
+        # заново вешать хоткеи: GApplication передаёт его сюда же, в тот же
+        # процесс. Раньше do_activate отрабатывал целиком, и каждая комбинация
+        # срабатывала дважды, а libayatana ругался «Объект уже экспортирован».
+        if self._initialized:
+            print("  Приложение уже запущено — поднимаю виджет", flush=True)
+            if self._widget is not None:
+                self._widget.fade_in()
+            return
+        self._initialized = True
+
+        # Себя отмечаем как работающий экземпляр: следующий запуск сравнит
+        # метки сборки и, если он новее, заменит нас.
+        instance.register(build_info.current())
 
         self._theme_manager = ThemeManager()
         self._widget = PlaybackWidget()
         self._widget.restore_position(*self._config.widget_position)
         self._wire_widget()
+        # Окно привязываем к приложению: иначе действия app.* из меню не найдутся
+        self.add_window(self._widget)
+        self._widget.set_menu_model(self.build_menu_model())
 
         self._theme_manager.connect("theme-changed", lambda *_: self._update_widget_theme())
         self._theme_manager.connect("accent-changed", lambda *_: self._update_widget_theme())
@@ -96,28 +130,124 @@ class Application(Gtk.Application):
         )
         self._tray.show()
         if not self._tray.available:
-            print(
+            print(_(
                 "  ⚠ Иконка в трее недоступна: нужен пакет gir1.2-ayatanaappindicator3-0.1\n"
-                "    и расширение AppIndicator в GNOME Shell. Сообщения идут уведомлениями.",
-                flush=True,
-            )
+                "    и расширение AppIndicator в GNOME Shell. Сообщения идут уведомлениями."
+            ), flush=True)
 
         print(
-            "\n✓ Silero TTS Reader запущен"
-            "\n  Горячие клавиши:"
-            f"\n    Озвучить выделенное : {self._config.hotkey_speak_selection}"
-            f"\n    Озвучить буфер      : {self._config.hotkey_speak_clipboard}"
-            f"\n    Стоп                : {self._config.hotkey_stop}"
-            "\n  Иконка в трее — правая кнопка мыши для меню"
-            "\n  Нажмите Ctrl+C в терминале для выхода\n",
+            _("\n✓ Silero TTS Reader запущен")
+            + _("\n  Горячие клавиши:")
+            + _("\n    Озвучить выделенное : {hotkey}").format(
+                hotkey=self._config.hotkey_speak_selection)
+            + _("\n    Озвучить буфер      : {hotkey}").format(
+                hotkey=self._config.hotkey_speak_clipboard)
+            + _("\n    Стоп                : {hotkey}").format(
+                hotkey=self._config.hotkey_stop)
+            + _("\n  Иконка в трее — правая кнопка мыши для меню")
+            + _("\n  Нажмите Ctrl+C в терминале для выхода\n")
+            + "\n  " + _("Язык интерфейса: {language}").format(
+                language=i18n.language_name())
+            + "\n  " + _("Сборка: {build}").format(
+                build=build_info.current().describe()),
             flush=True,
         )
 
+        self._install_signal_handlers()
         self._register_hotkeys()
         self._load_engine()
 
         # Сохранять позицию виджета раз в 2 секунды
         self._position_timer = GLib.timeout_add(2000, self._save_widget_position)
+
+    # ── Действия и горячие клавиши внутри приложения ─────────────────────────
+
+    def _setup_actions(self) -> None:
+        """Действия приложения и их сочетания клавиш.
+
+        Глобальные хоткеи на Wayland без evdev недоступны, а эти работают,
+        пока окно виджета в фокусе: без них при таком окружении приложением
+        нельзя управлять вообще.
+        """
+        actions = {
+            "settings": (self._open_settings, ["<Control>comma"]),
+            "about": (self._show_about, []),
+            "quit": (self._quit, ["<Control>q"]),
+            "speak-clipboard": (self._on_speak_clipboard, ["<Control><Shift>c"]),
+            "speak-selection": (
+                lambda: self._ui(self._start_tts, "__selection__"),
+                ["<Control><Shift>r"],
+            ),
+            "stop": (self._stop_playback, ["<Control><Shift>s"]),
+        }
+        for name, (callback, accels) in actions.items():
+            action = Gio.SimpleAction.new(name, None)
+            action.connect("activate", lambda _a, _p, cb=callback: cb())
+            self.add_action(action)
+            if accels:
+                self.set_accels_for_action(f"app.{name}", accels)
+
+    def build_menu_model(self) -> Gio.Menu:
+        """Меню для виджета: те же действия, что и клавиши."""
+        menu = Gio.Menu()
+        menu.append(_("Озвучить буфер обмена"), "app.speak-clipboard")
+        menu.append(_("Озвучить выделенное"), "app.speak-selection")
+        menu.append(_("Остановить"), "app.stop")
+        section = Gio.Menu()
+        section.append(_("Настройки"), "app.settings")
+        section.append(_("О программе"), "app.about")
+        menu.append_section(None, section)
+        tail = Gio.Menu()
+        tail.append(_("Выход"), "app.quit")
+        menu.append_section(None, tail)
+        return menu
+
+    # ── Открытие файлов ──────────────────────────────────────────────────────
+
+    def do_open(self, files, n_files: int, _hint: str) -> None:
+        """Озвучить открытые файлы: аргумент командной строки или «Открыть с помощью»."""
+        if not self._initialized:
+            self.do_activate()
+
+        texts: list[str] = []
+        for gfile in files:
+            path = gfile.get_path()
+            if not path:
+                self._notify(_("Не удалось открыть файл"))
+                continue
+            try:
+                texts.append(TextExtractor.read_text_file(path))
+            except (OSError, ValueError) as exc:
+                self._notify(str(exc))
+        if not texts:
+            return
+
+        text = "\n\n".join(texts).strip()
+        if not text:
+            self._notify(_("Файл пустой"))
+            return
+        # Длинный текст не обрезаем и не спрашиваем: он читается целиком,
+        # кусками по предложениям, а очередь синтеза ограничена — книга
+        # уходит в динамик по мере готовности, а не копится в памяти.
+        self._ui(self._start_tts, text)
+
+    def _install_signal_handlers(self) -> None:
+        """Штатный выход по SIGTERM: так нас просит закрыться новый экземпляр.
+
+        Без обработчика процесс умирает мгновенно, не сохранив конфиг и не сняв
+        иконку с шины, а следующий запуск получает занятое имя D-Bus.
+        """
+        try:
+            GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGTERM, self._on_sigterm)
+            GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGINT, self._on_sigterm)
+        except Exception:
+            pass  # не критично: остаётся обычное поведение по умолчанию
+
+    def _on_sigterm(self) -> bool:
+        print("  Получен сигнал завершения — закрываюсь", flush=True)
+        instance.clear()
+        self._quit()
+        return False  # одноразовый обработчик
 
     # ── Поток → интерфейс ────────────────────────────────────────────────────
 
@@ -144,19 +274,26 @@ class Application(Gtk.Application):
                 if self._config.speaker not in speakers and speakers:
                     self._config.speaker = speakers[0]
                     self._config.save()
-                print(f"  ✓ Модель загружена. Голос: {self._config.speaker}", flush=True)
-                print(f"    Доступные голоса: {', '.join(speakers)}", flush=True)
+                print("  ✓ " + _("Модель загружена. Голос: {voice}").format(
+                      voice=self._config.speaker), flush=True)
+                print("    " + _("Доступные голоса: {voices}").format(
+                      voices=", ".join(speakers)), flush=True)
                 # Английская модель необязательна: без неё латиница читается
                 # русскими фонемами, о чём честнее сказать сразу.
                 english = self._engine.get_available_speakers("en")
                 if english:
-                    print(f"  ✓ Английская модель: голос {self._config.speaker_for('en')}"
-                          f", голосов {len(english)}", flush=True)
+                    print(
+                        "  ✓ "
+                        + _("Английская модель: голос {voice}, голосов {count}").format(
+                            voice=self._config.speaker_for("en"), count=len(english)
+                        ),
+                        flush=True,
+                    )
                 else:
                     print("  ⚠ Английской модели нет: латиница будет читаться по-русски."
                           "\n    Скачать: silero-tts-model download en", flush=True)
             except TTSLoadError as exc:
-                print(f"  ✗ Ошибка: {exc}", flush=True)
+                print("  ✗ " + _("Ошибка: {error}").format(error=exc), flush=True)
                 self._ui(self._show_tts_error, str(exc))
 
         threading.Thread(target=_load, daemon=True, name="ModelLoader").start()
@@ -201,14 +338,10 @@ class Application(Gtk.Application):
         if text_or_marker == "__selection__":
             text = self._extractor.get_selected_text()
             if not text:
-                self._notify("Текст не выделен")
+                self._notify(_("Текст не выделен"))
                 return
         else:
             text = text_or_marker
-
-        if len(text) > TextExtractor.MAX_CHARS:
-            self._ask_long_text(text)
-            return
 
         self._stop_playback_sync()
         self._begin_pipeline(text)
@@ -220,11 +353,11 @@ class Application(Gtk.Application):
         speed: float | None = None,
     ) -> None:
         if not self._engine.is_loaded:
-            self._notify("Модель TTS ещё загружается, подождите...")
+            self._notify(_("Модель TTS ещё загружается, подождите..."))
             return
 
         self._stop_event = threading.Event()
-        self._audio_queue = queue.Queue()
+        self._audio_queue = queue.Queue(maxsize=AUDIO_QUEUE_SIZE)
         use_speed = speed if speed is not None else self._config.speed
         use_speaker = speaker if speaker is not None else self._config.speakers
 
@@ -307,7 +440,7 @@ class Application(Gtk.Application):
     def _on_speak_clipboard(self) -> None:
         text = self._extractor.get_clipboard_text()
         if not text:
-            self._notify("Буфер обмена не содержит текст")
+            self._notify(_("Буфер обмена не содержит текст"))
             return
         self._start_tts(text)
 
@@ -326,7 +459,13 @@ class Application(Gtk.Application):
             self._settings_dialog.present()
             return
 
-        speakers = self._engine.get_available_speakers() if self._engine.is_loaded else []
+        speakers: dict[str, list[str]] = {}
+        if self._engine.is_loaded:
+            speakers = {
+                lang: voices
+                for lang in self._engine.loaded_languages
+                if (voices := self._engine.get_available_speakers(lang))
+            }
         dialog = SettingsWindow(
             config=self._config,
             speakers=speakers,
@@ -354,7 +493,8 @@ class Application(Gtk.Application):
     def _preview_voice(self, speaker: str, speed: float) -> None:
         self._stop_playback_sync()
         self._begin_pipeline(
-            f"Привет! Это голос {speaker} со скоростью {speed:.2g}x.",
+            _("Привет! Это голос {speaker} со скоростью {speed}x.").format(
+                speaker=speaker, speed=f"{speed:.2g}"),
             speaker=speaker,
             speed=speed,
         )
@@ -381,49 +521,21 @@ class Application(Gtk.Application):
             modal=True,
             message_type=Gtk.MessageType.ERROR,
             buttons=Gtk.ButtonsType.CLOSE,
-            text="Не удалось синтезировать речь",
+            text=_("Не удалось синтезировать речь"),
         )
-        dialog.set_title("Ошибка TTS")
+        dialog.set_title(_("Ошибка TTS"))
         dialog.format_secondary_text(error_text)
         dialog.run()
         dialog.destroy()
-
-    def _ask_long_text(self, text: str) -> None:
-        dialog = Gtk.Dialog(title="Длинный текст", modal=True)
-        dialog.add_button("Отмена", Gtk.ResponseType.CANCEL)
-        dialog.add_button("Обрезать до лимита", RESPONSE_TRIM)
-        dialog.add_button("Озвучить полностью", RESPONSE_SPEAK_ALL)
-        dialog.set_default_response(RESPONSE_TRIM)
-
-        box = dialog.get_content_area()
-        box.set_border_width(16)
-        box.set_spacing(8)
-        label = Gtk.Label(
-            label=(
-                f"Текст содержит {len(text):,} символов "
-                f"(лимит: {TextExtractor.MAX_CHARS:,}).\nЧто сделать?"
-            ).replace(",", " ")
-        )
-        label.set_xalign(0.0)
-        box.pack_start(label, False, False, 0)
-        dialog.show_all()
-
-        response = dialog.run()
-        dialog.destroy()
-
-        if response == RESPONSE_SPEAK_ALL:
-            self._begin_pipeline(text)
-        elif response == RESPONSE_TRIM:
-            self._begin_pipeline(text[: TextExtractor.MAX_CHARS])
 
     def _show_about(self) -> None:
         dialog = Gtk.AboutDialog(modal=True)
         dialog.set_program_name(APP_NAME)
         dialog.set_version(APP_VERSION)
-        dialog.set_comments(
+        dialog.set_comments(_(
             "Озвучивание выделенного текста с помощью Silero TTS.\n"
             "Горячие клавиши и голос настраиваются в Настройках."
-        )
+        ))
         path = icon_path()
         if path:
             try:
@@ -444,6 +556,7 @@ class Application(Gtk.Application):
     # ── Выход ────────────────────────────────────────────────────────────────
 
     def _quit(self) -> None:
+        instance.clear()
         self._stop_playback_sync()
         self._hotkey_listener.stop_listening()
         self._config.save()
