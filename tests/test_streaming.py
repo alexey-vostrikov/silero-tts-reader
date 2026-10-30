@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import queue
+
+import numpy as np
 import sys
 import threading
 import time
@@ -30,16 +32,25 @@ def check(condition: bool, message: str) -> None:
 
 
 class FakeEngine:
-    """Движок-заглушка: сегмент в один отсчёт, без модели и без torch."""
+    """Движок-заглушка: без модели и без torch.
 
-    def __init__(self, delay: float = 0.0) -> None:
+    ``length`` — сколько сэмплов «синтезировать»: по длине сегмента в тесте
+    видно, добавлена ли тишина перед квантом.
+    """
+
+    sample_rate = 48000
+
+    def __init__(self, delay: float = 0.0, length: float = 0.0) -> None:
         self.synthesized: list[str] = []
         self._delay = delay
+        self._length = int(length)
 
     def synthesize(self, text: str, speaker=None):
         if self._delay:
             time.sleep(self._delay)
         self.synthesized.append(text)
+        if self._length:
+            return np.zeros(self._length, dtype=np.float32)
         return [0.0]
 
     @staticmethod
@@ -191,6 +202,72 @@ def test_quanta() -> None:
           "слова длинного предложения не потеряны")
 
 
+def test_pauses() -> None:
+    print("\n2c. Паузы: перед репликой и между абзацами")
+    text = "Глава один\n- Ну Лёха, ну удружил.\n\nОбычный абзац."
+    quanta = TTSWorker.split_into_quanta_typed(text)
+    kinds = [(q.kind, q.text[:22]) for q in quanta]
+    check(len(quanta) == 3, f"три кванта: {kinds}")
+    check(quanta[0].kind == "heading", "заголовок главы — отдельный квант")
+    check(quanta[1].kind == "dialogue", "реплика — отдельный квант диалога")
+    check(quanta[1].new_paragraph, "реплика начинает абзац")
+    check(quanta[2].new_paragraph, "обычный абзац начинается с паузы")
+    check(quanta[1].pause_ms(700, 400) == 700, "перед репликой — пауза диалога")
+    check(quanta[2].pause_ms(700, 400) == 400, "между абзацами — пауза абзаца")
+    check(quanta[0].pause_ms(700, 400) == 400, "перед заголовком — пауза абзаца")
+
+    # второе предложение реплики паузы перед собой не требует
+    multi = TTSWorker.split_into_quanta_typed("- Привет. Как дела?")
+    check(len(multi) == 2 and multi[0].kind == "dialogue" and multi[1].kind == "sentence",
+          "пауза только у первого предложения реплики")
+
+    # тишина действительно попадает в аудио сегмента
+    engine = FakeEngine(length=4800)   # 0,1 с «речи»
+    audio_queue: queue.Queue = queue.Queue()
+    stop = threading.Event()
+    config = make_config()
+    config.pause_dialogue_ms = 700
+    config.pause_paragraph_ms = 400
+    worker = TTSWorker(engine, text, {"ru": "xenia"}, config, audio_queue, stop)
+    worker.start()
+
+    sizes = []
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        try:
+            item = audio_queue.get(timeout=1)
+        except queue.Empty:
+            break
+        if TTSWorker.is_done_sentinel(item):
+            break
+        sizes.append(len(item))
+    worker.join(timeout=5)
+
+    check(len(sizes) == 3, f"три сегмента: {sizes}")
+    check(sizes[0] == 4800 + 19200, f"перед заголовком 400 мс тишины: {sizes[0]}")
+    check(sizes[1] == 4800 + 33600, f"перед репликой 700 мс тишины: {sizes[1]}")
+    check(sizes[2] == 4800 + 19200, f"перед абзацем 400 мс тишины: {sizes[2]}")
+
+    # нулевая настройка отключает паузу
+    config.pause_dialogue_ms = 0
+    config.pause_paragraph_ms = 0
+    engine2 = FakeEngine(length=4800)
+    q2: queue.Queue = queue.Queue()
+    worker2 = TTSWorker(engine2, text, {"ru": "xenia"}, config, q2, threading.Event())
+    worker2.start()
+    plain = []
+    while True:
+        try:
+            item = q2.get(timeout=2)
+        except queue.Empty:
+            break
+        if TTSWorker.is_done_sentinel(item):
+            break
+        plain.append(len(item))
+    worker2.join(timeout=5)
+    check(all(size == 4800 for size in plain), f"паузы выключены — голые сегменты: {plain}")
+
+
 def test_backpressure() -> None:
     print("\n3. Обратное давление очереди")
     engine = FakeEngine()
@@ -261,6 +338,7 @@ def main() -> int:
     test_chapters()
     test_chunk_bounds()
     test_quanta()
+    test_pauses()
     test_backpressure()
     test_done_sentinel()
     print(f"\nвсе проверки пройдены: {CHECKS}")

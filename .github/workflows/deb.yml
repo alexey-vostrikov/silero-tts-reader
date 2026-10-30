@@ -89,6 +89,8 @@ jobs:
           python3 tests/test_fb2.py
           # Потоковая подача: границы глав, обратное давление, остановка
           python3 tests/test_streaming.py
+          # Проигрывание: один поток вывода, пауза между фразами, общий прогресс
+          python3 tests/test_playback.py
           # Локализация: каталог свежий, все строки переведены, ни одна не забыта
           python3 packaging/i18n-build.py
           python3 packaging/i18n-audit.py
