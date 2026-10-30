@@ -1,7 +1,7 @@
 # Silero TTS Reader 🎙️🔊
 
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
-[![GUI Framework](https://img.shields.io/badge/GUI-GTK3%20%2F%20PyGObject-green.svg)](https://pygobject.gnome.org/)
+[![GUI Framework](https://img.shields.io/badge/GUI-GTK4%20%2F%20PyGObject-green.svg)](https://pygobject.gnome.org/)
 [![TTS Engine](https://img.shields.io/badge/TTS-Silero_v5-orange.svg)](https://silero.ai/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux_(X11%2FWayland)-lightgrey.svg)](https://www.kernel.org/)
@@ -173,8 +173,9 @@ user-unit `/usr/lib/systemd/user/silero-tts-reader.service` (не включае
 конфигурация модуля speech-dispatcher.
 
 `Depends` пакета `silero-tts-reader` — только то, что реально есть в архиве Ubuntu: `python3-gi`,
-`gir1.2-gtk-3.0`, `gir1.2-ayatanaappindicator3-0.1` (иконка в трее на Wayland) и `rubberband-cli`
-(изменение скорости). Тяжёлые и необязательные для запуска `python3-torch` (движок синтеза, ~65 МБ в
+`gir1.2-gtk-4.0`, `libgtk4-layer-shell0` (угол экрана под Wayland) и `python3-xlib` (запасной путь
+под X11), а также `rubberband-cli` (изменение скорости). Значок в лотке отдаётся по D-Bus
+(StatusNotifierItem), поэтому отдельный пакет AppIndicator больше не нужен. Тяжёлые и необязательные для запуска `python3-torch` (движок синтеза, ~65 МБ в
 пакете, ~117 МБ на диске) и `python3-sounddevice` (вывод звука), а также `python3-pynput` и
 `python3-evdev` (глобальные хоткеи) — в `Recommends`: в Ubuntu 26.04 они есть в архиве, ставятся
 одной командой, а запускатор проверяет их наличие и подсказывает её:
@@ -549,7 +550,7 @@ silero-tts-reader/
 ├── silero_tts_reader/
 │   ├── config/              # Менеджер конфигурации JSON
 │   ├── core/                # Ядро: движок TTS, плеер, скорость, текст
-│   ├── ui/                  # GTK3 UI: трей, плавающий виджет, окно настроек
+│   ├── ui/                  # GTK4 UI: значок в лотке, плавающий виджет, настройки
 │   ├── app.py               # Главный контроллер приложения
 │   ├── i18n.py              # Языки интерфейса (ru_RU / en_US)
 │   ├── models.py            # Каталог моделей и silero-tts-model
