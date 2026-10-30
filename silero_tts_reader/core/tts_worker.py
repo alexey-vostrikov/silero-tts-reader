@@ -27,7 +27,7 @@ class TTSWorker(threading.Thread):
         self,
         engine: TTSEngine,
         text: str,
-        speaker: str,
+        speaker: str | dict[str, str],
         config: ConfigManager,
         audio_queue: queue.Queue,
         stop_event: threading.Event,

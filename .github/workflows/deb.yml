@@ -54,16 +54,25 @@ jobs:
       - name: Headless GTK tests
         run: |
           DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-            python3-gi gir1.2-gtk-3.0 gir1.2-glib-2.0 python3-numpy xvfb
+            python3-gi gir1.2-gtk-3.0 gir1.2-glib-2.0 python3-numpy xvfb rubberband-cli
           xvfb-run -a python3 tests/smoke_gtk.py
 
-      - name: Hotkey tests
+      - name: Unit tests
         run: |
           # Регрессия: pynput-ветка роняла приложение на старте (dict как ключ
           # словаря). В образе pynput нет — тест подставляет пустышку и
           # отдельным прогоном проверяет систему совсем без pynput.
           python3 tests/test_hotkeys.py
           python3 tests/run_hotkeys_without_pynput.py
+          # Языки: выбор модели, профили, числительные, миграция конфига.
+          # Модели подменяются заглушками — 139 МБ в CI не качаются. Второй
+          # прогон скрывает torch: в образе его нет, и порядок проверок не
+          # должен от этого зависеть.
+          python3 tests/test_multilang.py
+          python3 tests/run_multilang_without_torch.py
+          # Скорость: растяжение через rubberband-cli и шкала speech-dispatcher.
+          # rubberband-cli поставлен выше, поэтому проверяется настоящая работа.
+          python3 tests/test_rate.py
 
       - name: Build packages
         id: build
@@ -117,9 +126,12 @@ jobs:
           }
 
           check dist/silero-tts-common_*.deb \
+            ./usr/bin/silero-tts-model \
             ./usr/lib/silero-tts/silero_tts_reader/__init__.py \
+            ./usr/lib/silero-tts/silero_tts_reader/models.py \
             ./usr/lib/silero-tts/silero_tts_reader/config/config_manager.py \
             ./usr/lib/silero-tts/silero_tts_reader/core/tts_engine.py \
+            ./usr/lib/silero-tts/silero_tts_reader/core/rate.py \
             ./usr/share/doc/silero-tts-common/copyright
           check dist/silero-tts-reader_*.deb \
             ./usr/bin/silero-tts-reader \
@@ -221,6 +233,12 @@ jobs:
           printf '%s' "$out" | grep -q "не хватает Python-модулей"
           printf '%s' "$out" | grep -q "sounddevice"
           echo "  ✓ запускатор сообщает об отсутствующих модулях и подсказывает установку"
+
+          # Загрузчик моделей: каталог должен читаться без torch и без сети
+          silero-tts-model list | tee /tmp/models.txt
+          grep -q "v5_ru.pt" /tmp/models.txt
+          grep -q "v3_en.pt" /tmp/models.txt
+          echo "  ✓ silero-tts-model перечисляет модели"
 
           # ── speech-dispatcher ────────────────────────────────────────────────
           silero-tts-speechd status >/dev/null 2>&1 && {

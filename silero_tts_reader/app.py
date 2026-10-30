@@ -53,8 +53,8 @@ class Application(Gtk.Application):
         self._config = ConfigManager()
         self._extractor = TextExtractor()
         self._engine = TTSEngine(
-            model_path=self._config.model_path,
             sample_rate=self._config.sample_rate,
+            models=self._config.models,
         )
         self._hotkey_listener = HotkeyListener()
         self._stop_event = threading.Event()
@@ -146,6 +146,15 @@ class Application(Gtk.Application):
                     self._config.save()
                 print(f"  ✓ Модель загружена. Голос: {self._config.speaker}", flush=True)
                 print(f"    Доступные голоса: {', '.join(speakers)}", flush=True)
+                # Английская модель необязательна: без неё латиница читается
+                # русскими фонемами, о чём честнее сказать сразу.
+                english = self._engine.get_available_speakers("en")
+                if english:
+                    print(f"  ✓ Английская модель: голос {self._config.speaker_for('en')}"
+                          f", голосов {len(english)}", flush=True)
+                else:
+                    print("  ⚠ Английской модели нет: латиница будет читаться по-русски."
+                          "\n    Скачать: silero-tts-model download en", flush=True)
             except TTSLoadError as exc:
                 print(f"  ✗ Ошибка: {exc}", flush=True)
                 self._ui(self._show_tts_error, str(exc))
@@ -217,7 +226,7 @@ class Application(Gtk.Application):
         self._stop_event = threading.Event()
         self._audio_queue = queue.Queue()
         use_speed = speed if speed is not None else self._config.speed
-        use_speaker = speaker if speaker is not None else self._config.speaker
+        use_speaker = speaker if speaker is not None else self._config.speakers
 
         self._player = AudioPlayer(
             audio_queue=self._audio_queue,
