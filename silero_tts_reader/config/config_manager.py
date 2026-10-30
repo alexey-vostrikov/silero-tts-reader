@@ -67,6 +67,8 @@ DEFAULTS: dict[str, Any] = {
     "ui": {
         "theme": "system",  # "system", "dark", "light"
         "use_system_accent": True,
+        # значок в трее: auto — по системной теме, иначе светлый или тёмный штрих
+        "tray_icon": "auto",
         # язык интерфейса: auto — из окружения (LANG/LC_ALL), иначе ru_RU/en_US
         "language": "auto",
     },
@@ -342,6 +344,16 @@ class ConfigManager:
     @use_system_accent.setter
     def use_system_accent(self, v: bool) -> None:
         self.set("ui", "use_system_accent", bool(v))
+
+    @property
+    def tray_icon(self) -> str:
+        """Вариант значка трея: auto (по теме), light или dark."""
+        return self.get("ui", "tray_icon", default="auto")
+
+    @tray_icon.setter
+    def tray_icon(self, v: str) -> None:
+        if v in ("auto", "light", "dark"):
+            self.set("ui", "tray_icon", v)
 
     @property
     def ui_language(self) -> str:

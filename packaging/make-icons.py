@@ -24,6 +24,7 @@ from PIL import Image, ImageDraw
 
 ICON_NAME = "silero-tts-reader"
 SIZES = (16, 24, 32, 48, 64, 128, 256, 512)
+TRAY_SIZES = (16, 22, 24, 32, 48)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -32,6 +33,11 @@ ROOT = Path(__file__).resolve().parent.parent
 BACK_TOP = (74, 58, 178)
 BACK_BOTTOM = (126, 78, 214)
 GLYPH = (255, 255, 255)
+
+# Штрих значка трея. Не чистый белый и не чистый чёрный: панель обычно сама
+# подмешивает прозрачность, и крайние значения выглядят грубее остальных значков.
+TRAY_LIGHT = (250, 250, 250)   # для тёмной панели
+TRAY_DARK = (43, 43, 46)       # для светлой панели
 
 SS = 8   # кратность суперсэмплинга: рисуем крупно, уменьшаем Ланцошем
 
@@ -122,6 +128,45 @@ def app_icon(size: int) -> Image.Image:
     return img.resize((size, size), Image.Resampling.LANCZOS)
 
 
+def _speaker_16(colour: tuple[int, int, int, int], state: str) -> Image.Image:
+    """Значок трея 16×16 по пиксельной сетке.
+
+    В 16 px сглаженный рисунок расплывается: дуга становится серой кашей, а
+    знак паузы сливается в полосу. Здесь всё рисуется целыми пикселями —
+    резко, без полутонов, как принято для значков такого размера.
+    """
+    img = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    # Корпус и раструб одинаковы во всех состояниях: значок не «прыгает».
+    draw.rectangle((2, 6, 5, 10), fill=colour)
+    draw.polygon([(5, 6), (9, 2), (9, 13), (5, 10)], fill=colour)
+    if state == "wave":
+        # Одна непрерывная дуга: вторая в 16 px всё равно пропадает.
+        for point in ((10, 5), (11, 6), (11, 7), (11, 8), (11, 9), (10, 10)):
+            draw.point(point, fill=colour)
+    elif state == "pause":
+        draw.rectangle((10, 5, 11, 10), fill=colour)
+        draw.rectangle((13, 5, 14, 10), fill=colour)
+    return img
+
+
+def tray_icon(size: int, colour: tuple[int, int, int],
+              wave: bool = False, pause: bool = False) -> Image.Image:
+    """Монохромный значок трея без плашки: динамик, волны, пауза."""
+    state = "pause" if pause else ("wave" if wave else "idle")
+    if size == 16:
+        return _speaker_16((*colour, 255), state)
+
+    side = size * SS
+    img = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    small = size < 24
+    pad = side * (0.04 if small else 0.06)
+    _speaker(draw, (pad, pad, side - pad, side - pad),
+             (*colour, 255), waves=2 if wave else 0, pause=pause, simple=small)
+    return img.resize((size, size), Image.Resampling.LANCZOS)
+
+
 def main() -> int:
     dst = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "build" / "icons"
 
@@ -136,6 +181,21 @@ def main() -> int:
     app_icon(512).save(big, "PNG", optimize=True)
     print(f"  {big.relative_to(dst)}  ({big.stat().st_size} байт)")
 
+    # Значки трея. Имя кодирует и цвет штриха, и состояние: панель не умеет
+    # перекрашивать чужие значки, поэтому вариант выбираем сами.
+    variants = {
+        "light": TRAY_LIGHT,
+        "dark": TRAY_DARK,
+    }
+    states = {"": {}, "-wave": {"wave": True}, "-pause": {"pause": True}}
+    for variant, colour in variants.items():
+        for suffix, kwargs in states.items():
+            for size in TRAY_SIZES:
+                name = f"{ICON_NAME}-tray-{variant}{suffix}"
+                out = dst / f"hicolor/{size}x{size}/apps/{name}.png"
+                out.parent.mkdir(parents=True, exist_ok=True)
+                tray_icon(size, colour, **kwargs).save(out, "PNG", optimize=True)
+        print(f"  hicolor/*/apps/{ICON_NAME}-tray-{variant}[...].png")
     return 0
 
 

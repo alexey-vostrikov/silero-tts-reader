@@ -309,6 +309,19 @@ install -Dm644 "$READER_ROOT/usr/share/icons/silero-tts-reader.png" \
 rm -f "$READER_ROOT/usr/share/icons/silero-tts-reader.png"
 find "$READER_ROOT/usr/share/icons" -name '*.png' -exec chmod 0644 {} +
 
+# Кэш значков: без него тема может отдавать старый набор после обновления,
+# а новые имена (значки трея) не находиться вовсе.
+mkdir -p "$READER_ROOT/DEBIAN"
+cat > "$READER_ROOT/DEBIAN/postinst" <<'POSTINST'
+#!/bin/sh
+set -e
+if [ "$1" = configure ] && command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || true
+fi
+exit 0
+POSTINST
+chmod 0755 "$READER_ROOT/DEBIAN/postinst"
+
 # systemd user unit (запуск по требованию, не включается автоматически)
 sed -e 's|^ExecStart=.*|ExecStart=/usr/bin/silero-tts-reader|' \
     silero-tts-reader.service > "$READER_ROOT/usr/lib/systemd/user/$READER.service"
