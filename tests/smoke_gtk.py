@@ -179,17 +179,30 @@ print("\n4. SettingsWindow (Gtk.Dialog + Notebook)")
 cfg = ConfigManager()
 dlg = SettingsWindow(
     config=cfg,
-    speakers=["xenia", "aidar", "eugene"],
+    speakers={"ru": ["xenia", "aidar", "eugene"], "en": ["en_0", "en_42", "en_117"]},
     on_preview_voice=lambda sp, speed: calls.append(("preview", sp, speed)),
     theme_manager=tm,
 )
 check("четыре вкладки", dlg._notebook.get_n_pages() == 4, str(dlg._notebook.get_n_pages()))
 check("горячие клавиши подставлены", dlg._hk_selection.get_label() != "", dlg._hk_selection.get_label())
-check("голос выбран", dlg._voice_combo.get_active_text() == "xenia", str(dlg._voice_combo.get_active_text()))
+check("голос ru выбран", dlg.selected_voice() == "xenia", dlg.selected_voice())
+check("голосов ru три", len(dlg._voices_by_lang["ru"]) == 3, str(dlg._voices_by_lang))
 
 dlg._hk_stop.set_hotkey("<ctrl>+<alt>+q")
 check("set_hotkey/get_hotkey", dlg._hk_stop.get_hotkey() == "<ctrl>+<alt>+q")
-dlg._voice_combo.set_active(1)
+# поиск по голосам: у английской модели их 119, перебором не выбрать
+dlg._voice_lang_combo.set_active(1)   # en
+check("переключение языка перезаполняет список", dlg.selected_voice() == "en_0", dlg.selected_voice())
+dlg._voice_search.set_text("42")
+check("поиск фильтрует голоса", dlg.selected_voice() == "en_42", dlg.selected_voice())
+check("в отфильтрованном списке одна строка", dlg._voice_filter.iter_n_children(None) == 1,
+      str(dlg._voice_filter.iter_n_children(None)))
+dlg._voice_search.set_text("нет такого")
+check("пустой результат ничего не выбирает", dlg._voice_filter.iter_n_children(None) == 0,
+      str(dlg._voice_filter.iter_n_children(None)))
+dlg._voice_search.set_text("")
+dlg._voice_lang_combo.set_active(0)   # обратно ru
+dlg._select_voice("aidar")
 dlg._speed_slider.set_value(1.5)
 dlg._theme_combo.set_active(1)  # тёмная
 dlg._btn_preview.clicked()

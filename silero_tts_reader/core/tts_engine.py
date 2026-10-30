@@ -16,6 +16,7 @@ from typing import Any
 
 import numpy as np
 
+from ..i18n import _
 from ..models import DEFAULT_LANG, MODELS, ModelProfile, resolve_language, split_by_script
 
 
@@ -225,7 +226,10 @@ class TTSEngine:
     def _load_model(self, lang: str) -> None:
         """Загрузить модель языка. Вызывается под self._lock."""
         if lang not in MODELS:
-            raise TTSLoadError(f"неизвестный язык модели: {lang} (есть: {', '.join(MODELS)})")
+            raise TTSLoadError(
+                _("неизвестный язык модели: {lang} (есть: {known})").format(
+                    lang=lang, known=", ".join(MODELS))
+            )
 
         # Сначала проверяем файл: сообщение «модель не найдена» должно быть
         # одинаковым и с torch, и без него. Иначе без torch пользователь
@@ -233,12 +237,13 @@ class TTSEngine:
         path = self._paths.get(lang) or Path(MODELS[lang].filename)
         if not path.is_file():
             raise TTSLoadError(
-                f"Модель не найдена: {path}\n\n"
-                f"Скачайте её:\n"
-                f"  silero-tts-model download {lang}\n\n"
-                f"или вручную:\n"
-                f"  mkdir -p {path.parent}\n"
-                f"  wget -O {path} {MODELS[lang].url}"
+                _("Модель не найдена: {path}\n\n"
+                  "Скачайте её:\n"
+                  "  silero-tts-model download {lang}\n\n"
+                  "или вручную:\n"
+                  "  mkdir -p {parent}\n"
+                  "  wget -O {path} {url}").format(
+                    path=path, lang=lang, parent=path.parent, url=MODELS[lang].url)
             )
 
         import torch  # noqa: PLC0415 — без torch движок не нужен вовсе
@@ -258,7 +263,9 @@ class TTSEngine:
         except TTSLoadError:
             raise
         except Exception as exc:
-            raise TTSLoadError(f"Ошибка загрузки модели {path.name}: {exc}") from exc
+            raise TTSLoadError(
+                _("Ошибка загрузки модели {file}: {error}").format(file=path.name, error=exc)
+            ) from exc
 
         self._models[lang] = model
         self._speakers[lang] = speakers

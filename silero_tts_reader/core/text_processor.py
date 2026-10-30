@@ -128,6 +128,8 @@ def _num_to_ru_phrase(val: int) -> str:
     return " ".join(parts).strip()
 
 
+from ..i18n import _
+
 class TextProcessor:
     """Handles text preprocessing, LLM API phonetization, and rule-based transliteration."""
 
@@ -163,6 +165,8 @@ class TextProcessor:
             try:
                 v1 = int(m.group(1))
                 v2 = int(m.group(2))
+                # i18n: нет перевода — это произносимое слово для русской
+                # модели, а не подпись интерфейса
                 return f"{_num_to_ru_phrase(v1)} точка {_num_to_ru_phrase(v2)}"
             except Exception:
                 return m.group(0)
@@ -367,9 +371,9 @@ class TextProcessor:
                 timeout=timeout,
                 system_prompt=system_prompt,
             )
-            return True, f"Соединение успешно! Ответ ИИ: '{res}'"
+            return True, _("Соединение успешно! Ответ ИИ: '{answer}'").format(answer=res)
         except Exception as exc:
-            return False, f"Ошибка подключения: {exc}"
+            return False, _("Ошибка подключения: {error}").format(error=exc)
 
     URL_PATTERN = re.compile(
         r"(?:https?://|ftps?://|www\.)[^\s<>'\"\)]+|[a-zA-Z0-9.\-]+\.(?:com|org|net|ru|io|dev|ai|app|gov|edu|me|info|site|online|tech|xyz|co|by|ua|kz)[^\s<>'\"\)]*",

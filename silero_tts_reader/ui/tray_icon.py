@@ -18,6 +18,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 
 from gi.repository import Gtk  # noqa: E402
+from ..i18n import _
 
 _ASSETS_DIR = Path(__file__).parent.parent / "assets"
 _ICON_NAME = "audio-headset"
@@ -81,23 +82,23 @@ class TrayIcon:
     def _build_menu(self) -> Gtk.Menu:
         menu = Gtk.Menu()
 
-        item = Gtk.MenuItem(label="📋  Озвучить буфер обмена")
+        item = Gtk.MenuItem(label=_("📋  Озвучить буфер обмена"))
         item.connect("activate", lambda _i: self._on_speak_clipboard())
         menu.append(item)
 
         menu.append(Gtk.SeparatorMenuItem())
 
-        item = Gtk.MenuItem(label="⚙️  Настройки")
+        item = Gtk.MenuItem(label=_("⚙️  Настройки"))
         item.connect("activate", lambda _i: self._on_settings())
         menu.append(item)
 
-        item = Gtk.MenuItem(label="ℹ️  О программе")
+        item = Gtk.MenuItem(label=_("ℹ️  О программе"))
         item.connect("activate", lambda _i: self._on_about())
         menu.append(item)
 
         menu.append(Gtk.SeparatorMenuItem())
 
-        item = Gtk.MenuItem(label="✖  Выход")
+        item = Gtk.MenuItem(label=_("✖  Выход"))
         item.connect("activate", lambda _i: self._on_quit())
         menu.append(item)
 

@@ -448,6 +448,7 @@ class HotkeyListener:
         keyboards = EvdevHotkeyListener.get_keyboards() if HAS_EVDEV else []
         if keyboards:
             self._backend = "evdev"
+            # i18n: нет перевода — строка журнала в консоли
             print(f"  ✓ Использование evdev (Wayland) — устройств: {len(keyboards)}", flush=True)
             if not self._evdev_listener:
                 self._evdev_listener = EvdevHotkeyListener()

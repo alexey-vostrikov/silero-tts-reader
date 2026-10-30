@@ -17,6 +17,9 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import i18n
+from .i18n import _
+
 MODEL_DIR = Path.home() / ".local" / "share" / "silero-tts-reader"
 BASE_URL = "https://models.silero.ai/models/tts"
 
@@ -87,7 +90,7 @@ def model_path(lang: str) -> Path:
     """Путь к файлу модели языка (файл может отсутствовать)."""
     profile = MODELS.get(lang)
     if profile is None:
-        raise KeyError(f"неизвестный язык модели: {lang}")
+        raise KeyError(_("неизвестный язык модели: {lang}").format(lang=lang))
     return MODEL_DIR / profile.filename
 
 
@@ -200,8 +203,13 @@ def download(lang: str, progress: bool = True) -> Path:
             return
         done = min(blocks * block_size, total)
         percent = done * 100 // total
-        print(f"\r  {profile.filename}: {percent:3d}%  ({done // 1048576} из {total // 1048576} МБ)",
-              end="", file=sys.stderr, flush=True)
+        print(
+            _("\r  {file}: {percent:3d}%  ({done} из {total} МБ)").format(
+                file=profile.filename, percent=percent,
+                done=done // 1048576, total=total // 1048576,
+            ),
+            end="", file=sys.stderr, flush=True,
+        )
 
     urllib.request.urlretrieve(profile.url, target, _hook)
     if progress:
@@ -210,12 +218,16 @@ def download(lang: str, progress: bool = True) -> Path:
 
 
 def _cmd_list() -> int:
-    print(f"каталог моделей: {MODEL_DIR}")
-    print(f"{'язык':6} {'файл':12} {'размер':>8}  состояние")
+    print(_("каталог моделей: {directory}").format(directory=MODEL_DIR))
+    print(f"{_('язык'):<6} {_('файл'):<12} {_('размер'):>8}  {_('состояние')}")
     for lang, profile in MODELS.items():
         path = model_path(lang)
-        state = "установлена" if path.is_file() else f"скачать: silero-tts-model download {lang}"
-        print(f"{lang:6} {profile.filename:12} {profile.size_mb:5d} МБ  {state}")
+        if path.is_file():
+            state = _("установлена")
+        else:
+            state = _("скачать: {command}").format(
+                command=f"silero-tts-model download {lang}")
+        print(f"{lang:<6} {profile.filename:<12} {profile.size_mb:5d} {_('МБ')}  {state}")
     return 0
 
 
@@ -225,45 +237,69 @@ def _cmd_download(langs: list[str]) -> int:
     failed = 0
     for lang in langs:
         if lang not in MODELS:
-            print(f"неизвестный язык: {lang} (есть: {', '.join(MODELS)})", file=sys.stderr)
+            print(_("неизвестный язык: {lang} (есть: {known})").format(
+                lang=lang, known=", ".join(MODELS)), file=sys.stderr)
             failed += 1
             continue
         if is_installed(lang):
-            print(f"  {lang}: уже установлена ({model_path(lang)})")
+            print("  " + _("{lang}: уже установлена ({path})").format(
+                lang=lang, path=model_path(lang)))
             continue
-        print(f"  {lang}: качаю {MODELS[lang].url}")
+        print("  " + _("{lang}: качаю {url}").format(lang=lang, url=MODELS[lang].url))
         try:
             path = download(lang)
         except OSError as exc:
-            print(f"  {lang}: не удалось скачать — {exc}", file=sys.stderr)
+            print("  " + _("{lang}: не удалось скачать — {error}").format(
+                lang=lang, error=exc), file=sys.stderr)
             failed += 1
             continue
-        print(f"  {lang}: готово ({path}, {path.stat().st_size // 1048576} МБ)")
+        print("  " + _("{lang}: готово ({path}, {size} МБ)").format(
+            lang=lang, path=path, size=path.stat().st_size // 1048576))
     return 1 if failed else 0
 
 
 def _cmd_path(lang: str) -> int:
     if lang not in MODELS:
-        print(f"неизвестный язык: {lang}", file=sys.stderr)
+        print(_("неизвестный язык: {lang}").format(lang=lang), file=sys.stderr)
         return 1
     path = model_path(lang)
     print(path)
     return 0 if path.is_file() else 1
 
 
+def _init_language() -> None:
+    """Поднять язык вывода из ~/.config/silero-tts-reader/config.json.
+
+    Обратный импорт config_manager недопустим: он сам импортирует этот модуль
+    (пути к моделям). Поэтому язык читается напрямую из файла.
+    """
+    explicit = None
+    config_file = Path.home() / ".config" / "silero-tts-reader" / "config.json"
+    try:
+        import json
+
+        with config_file.open(encoding="utf-8") as handle:
+            saved = json.load(handle)
+        explicit = (saved.get("ui") or {}).get("language")
+    except (OSError, ValueError):
+        explicit = None
+    i18n.init(explicit)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="silero-tts-model",
-        description="Модели Silero TTS: что установлено, что скачать.",
+        description=_("Модели Silero TTS: что установлено, что скачать."),
     )
     sub = parser.add_subparsers(dest="command")
-    sub.add_parser("list", help="список моделей и их состояние")
-    download_parser = sub.add_parser("download", help="скачать модели")
-    download_parser.add_argument("languages", nargs="*", metavar="ЯЗЫК",
-                                 help=f"коды языков: {', '.join(MODELS)}")
-    path_parser = sub.add_parser("path", help="путь к файлу модели")
-    path_parser.add_argument("language", metavar="ЯЗЫК")
+    sub.add_parser("list", help=_("список моделей и их состояние"))
+    download_parser = sub.add_parser("download", help=_("скачать модели"))
+    download_parser.add_argument("languages", nargs="*", metavar=_("ЯЗЫК"),
+                                 help=_("коды языков: {codes}").format(codes=", ".join(MODELS)))
+    path_parser = sub.add_parser("path", help=_("путь к файлу модели"))
+    path_parser.add_argument("language", metavar=_("ЯЗЫК"))
 
+    _init_language()
     args = parser.parse_args(argv)
     if args.command == "download":
         return _cmd_download(args.languages)

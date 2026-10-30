@@ -56,6 +56,8 @@ DEFAULTS: dict[str, Any] = {
     "ui": {
         "theme": "system",  # "system", "dark", "light"
         "use_system_accent": True,
+        # язык интерфейса: auto — из окружения (LANG/LC_ALL), иначе ru_RU/en_US
+        "language": "auto",
     },
     "transliteration": {
         "enabled": True,
@@ -196,6 +198,13 @@ class ConfigManager:
             result.update({str(k): str(v) for k, v in configured.items() if v})
         return result
 
+    def set_speaker(self, language: str, voice: str) -> None:
+        """Запомнить голос для конкретного языка."""
+        self.set("tts", "speakers", {**self.speakers, language: voice})
+        if language == DEFAULT_LANG:
+            # совместимость со старым одиночным ключом
+            self.set("tts", "speaker", voice)
+
     def speaker_for(self, language: str) -> str:
         return self.speakers.get(
             language,
@@ -279,6 +288,15 @@ class ConfigManager:
     @use_system_accent.setter
     def use_system_accent(self, v: bool) -> None:
         self.set("ui", "use_system_accent", bool(v))
+
+    @property
+    def ui_language(self) -> str:
+        """Язык интерфейса: ``auto`` или код из i18n.AVAILABLE."""
+        return str(self.get("ui", "language", default="auto"))
+
+    @ui_language.setter
+    def ui_language(self, v: str) -> None:
+        self.set("ui", "language", str(v))
 
     @property
     def transliteration_enabled(self) -> bool:

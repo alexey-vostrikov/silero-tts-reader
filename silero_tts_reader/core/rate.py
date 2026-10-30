@@ -17,6 +17,8 @@ from pathlib import Path
 
 import numpy as np
 
+from ..i18n import _
+
 # Минимум и максимум, которые имеет смысл предлагать пользователю.
 MIN_SPEED = 0.5
 MAX_SPEED = 3.0
@@ -80,7 +82,11 @@ def _read_float_wav(path: Path) -> tuple[np.ndarray, int]:
     elif width == 2:
         samples = np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
     else:
-        raise ValueError(f"неожиданная разрядность вывода rubberband: {width * 8} бит")
+        raise ValueError(
+            _("неожиданная разрядность вывода rubberband: {bits} бит").format(
+                bits=width * 8
+            )
+        )
 
     if channels > 1:
         samples = samples.reshape(-1, channels).mean(axis=1)
@@ -116,8 +122,10 @@ def time_stretch(samples: np.ndarray, sample_rate: int, speed: float) -> np.ndar
         )
         if result.returncode != 0 or not target.is_file():
             raise RuntimeError(
-                f"rubberband завершился с кодом {result.returncode}: "
-                f"{(result.stderr or result.stdout).strip()[:200]}"
+                _("rubberband завершился с кодом {code}: {output}").format(
+                    code=result.returncode,
+                    output=(result.stderr or result.stdout).strip()[:200],
+                )
             )
         stretched, _ = _read_float_wav(target)
     return stretched
