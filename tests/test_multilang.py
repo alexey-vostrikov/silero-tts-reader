@@ -11,17 +11,16 @@ import json
 import sys
 import tempfile
 from pathlib import Path
-from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import numpy as np  # noqa: E402
+import numpy as np
 
-from silero_tts_reader import models as models_module  # noqa: E402
-from silero_tts_reader.config import config_manager as cfg_module  # noqa: E402
-from silero_tts_reader.config.config_manager import ConfigManager  # noqa: E402
-from silero_tts_reader.core.text_processor import TextProcessor  # noqa: E402
-from silero_tts_reader.core.tts_engine import TTSEngine  # noqa: E402
+from silero_tts_reader import models as models_module
+from silero_tts_reader.config import config_manager as cfg_module
+from silero_tts_reader.config.config_manager import ConfigManager
+from silero_tts_reader.core.text_processor import TextProcessor
+from silero_tts_reader.core.tts_engine import TTSEngine
 
 CHECKS = 0
 
@@ -289,7 +288,7 @@ def test_download_hint() -> None:
                                "en": "/nonexistent/v3_en.pt"})
     try:
         engine.load("en")
-    except Exception as exc:  # noqa: BLE001 — ждём TTSLoadError с подсказкой
+    except Exception as exc:
         message = str(exc)
         check("silero-tts-model download en" in message, "в ошибке есть команда загрузки")
         check("/nonexistent/v3_en.pt" in message, "в ошибке указан ожидаемый путь")

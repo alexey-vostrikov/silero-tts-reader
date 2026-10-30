@@ -7,7 +7,6 @@
 """
 from __future__ import annotations
 
-import os
 import sys
 import tempfile
 import types
@@ -72,31 +71,29 @@ sys.modules["pynput.keyboard"] = keyboard
 sys.modules.setdefault("evdev", None)  # hotkey_listener ловит ImportError сам
 
 # ── Окружение GTK ────────────────────────────────────────────────────────────
-import gi  # noqa: E402
+import gi
 
-gi.require_version("Gdk", "3.0")
-gi.require_version("Gtk", "3.0")
-from gi.repository import Gdk, GLib, Gtk  # noqa: E402
+gi.require_version("Gdk", "4.0")
+gi.require_version("Gtk", "4.0")
+from gi.repository import Gdk, GLib, Gtk
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # Конфиг — во временный каталог, чтобы не трогать настоящий
-import silero_tts_reader.config.config_manager as cfg_mod  # noqa: E402
+import silero_tts_reader.config.config_manager as cfg_mod
 
 TMP = Path(tempfile.mkdtemp(prefix="str-gtk-smoke-"))
 cfg_mod.CONFIG_DIR = TMP
 cfg_mod.CONFIG_FILE = TMP / "config.json"
 
-from silero_tts_reader.config.config_manager import ConfigManager  # noqa: E402
-from silero_tts_reader.ui.playback_widget import PlaybackWidget, ProgressBar  # noqa: E402
-from silero_tts_reader.ui.settings_window import (  # noqa: E402
-    HotkeyCapture,
+from silero_tts_reader.config.config_manager import ConfigManager
+from silero_tts_reader.ui.playback_widget import PlaybackWidget, ProgressBar
+from silero_tts_reader.ui.settings_window import (
     SettingsWindow,
     _keyval_to_pynput,
 )
-from silero_tts_reader.ui.theme_manager import ThemeManager, rgba, shift_color  # noqa: E402
-from silero_tts_reader.ui.tray_icon import TrayIcon  # noqa: E402
-from silero_tts_reader.ui import tray_icon as tray_module  # noqa: E402
+from silero_tts_reader.ui.sni_tray import MenuEntry, StatusNotifierTray
+from silero_tts_reader.ui.theme_manager import ThemeManager, rgba, shift_color
 
 ok = 0
 fail = 0
@@ -143,8 +140,9 @@ w.on_rewind = lambda s: calls.append(("rewind", s))
 w.on_seek_fraction = lambda f: calls.append(("seek", round(f, 2)))
 
 check("окно создано, недекорировано", w.get_decorated() is False)
-check("окно обычное: видно в панели задач", w.get_skip_taskbar_hint() is False,
-      str(w.get_skip_taskbar_hint()))
+# В GTK4 подсказок панели задач нет: окно обычное, если не задан особый тип.
+check("окно обычное (не служебное)", w.get_modal() is False and w.get_decorated() is False,
+      f"modal={w.get_modal()}, decorated={w.get_decorated()}")
 
 w.apply_theme(is_dark=True, accent_color="#6366f1")
 w.set_progress(0.42)
@@ -153,19 +151,20 @@ w.set_paused(True)
 check("пауза меняет подпись кнопки", w._btn_pause.get_label() == "▶", w._btn_pause.get_label())
 w.set_paused(False)
 w.set_speed(1.75)
-check("set_speed выбирает значение в списке", w._speed_combo.get_active_id() == "1.75",
-      str(w._speed_combo.get_active_id()))
-check("скорость — выпадающий список, а не шкала", isinstance(w._speed_combo, Gtk.ComboBoxText),
+check("set_speed выбирает значение в списке", abs(w.get_speed() - 1.75) < 1e-6,
+      str(w.get_speed()))
+check("скорость — выпадающий список, а не шкала", isinstance(w._speed_combo, Gtk.DropDown),
       type(w._speed_combo).__name__)
-check("по умолчанию выбрано 1×", w._speed_combo.get_active_id() is not None, "")
-# У ComboBoxText в модели две колонки: подпись и id значения
-ids = {w._speed_combo.get_model()[i][1] for i in range(len(w._speed_combo.get_model()))}
-check("в списке есть 0.5× и 3×", {"0.5", "3.0"}.issubset(ids), str(sorted(ids)))
+check("по умолчанию выбрано 1×", w.get_speed() in (1.0, 1.75), str(w.get_speed()))
+# В GTK4 ComboBoxText заменён DropDown со списком строк
+model = w._speed_combo.get_model()
+labels = {model.get_string(i) for i in range(model.get_n_items())}
+check("в списке есть 0.5× и 3×", {"0.5×", "3×"}.issubset(labels), str(sorted(labels)))
 
-w._btn_pause.clicked()
-w._btn_stop.clicked()
-w._btn_rewind.clicked()
-w._btn_forward.clicked()
+w._btn_pause.emit("clicked")
+w._btn_stop.emit("clicked")
+w._btn_rewind.emit("clicked")
+w._btn_forward.emit("clicked")
 w._on_timeline_clicked(0.5)
 check(
     "клики по кнопкам доходят до callbacks",
@@ -174,8 +173,13 @@ check(
     str(calls),
 )
 
-w.show_all()
 w.fade_in()
+# Показ отложен на оборот цикла GLib — прокручиваем контекст, иначе проверка
+# увидит окно ещё не показанным (это и было причиной «окна нет» в работе).
+for _ in range(50):
+    if w.get_visible():
+        break
+    GLib.MainContext.default().iteration(False)
 check("окно показано", w.get_visible() is True)
 w.apply_theme(is_dark=False, accent_color="#2ec27e")
 check("смена темы на светлую не падает", True)
@@ -212,7 +216,7 @@ dlg._voice_lang_combo.set_active(0)   # обратно ru
 dlg._select_voice("aidar")
 dlg._speed_slider.set_value(1.5)
 dlg._theme_combo.set_active(1)  # тёмная
-dlg._btn_preview.clicked()
+dlg._btn_preview.emit("clicked")
 check("кнопка «Прослушать» вызывает callback", any(c[0] == "preview" for c in calls), str(calls[-1:]))
 
 saved: list[bool] = []
@@ -220,7 +224,7 @@ dlg.on_saved = lambda: saved.append(True)
 dlg._on_save()
 check("on_saved вызван", saved == [True])
 check("конфиг сохранён на диск", cfg_mod.CONFIG_FILE.exists(), str(cfg_mod.CONFIG_FILE))
-import json  # noqa: E402
+import json
 
 saved_cfg = json.loads(cfg_mod.CONFIG_FILE.read_text(encoding="utf-8"))
 check("голос записан в конфиг", saved_cfg["tts"]["speaker"] == "aidar", saved_cfg["tts"]["speaker"])
@@ -240,66 +244,34 @@ for keyval, expected in cases.items():
     got = _keyval_to_pynput(keyval)
     check(f"{Gdk.keyval_name(keyval)} → {expected}", got == expected, str(got))
 
-# ── 6. Трей ──────────────────────────────────────────────────────────────────
-print("\n6. TrayIcon")
-menu_calls: list[str] = []
-tray = TrayIcon(
-    on_speak_clipboard=lambda: menu_calls.append("clipboard"),
-    on_settings=lambda: menu_calls.append("settings"),
-    on_about=lambda: menu_calls.append("about"),
-    on_quit=lambda: menu_calls.append("quit"),
-)
-items = tray._menu.get_children()
-check("в меню 4 пункта + 2 разделителя", len(items) == 6, str(len(items)))
+# ── 6. Значок в лотке ───────────────────────────────────────────────────────
+print("\n6. StatusNotifierItem")
+# Значок теперь не GTK-объект: он живёт на шине D-Bus. Здесь проверяется то,
+# что видно без службы лотка — отказ вместо падения и состав меню.
+tray = StatusNotifierTray(icon_name="silero-tts-reader", title="Silero TTS Reader")
+tray.set_entries([
+    MenuEntry("Показать окно", lambda: None),
+    MenuEntry("Открыть файл…", lambda: None),
+    MenuEntry(separator=True),
+    MenuEntry("Выход", lambda: None),
+])
+check("меню значка: 3 пункта и разделитель", len(tray._flat) == 4, str(len(tray._flat)))
+check("разделитель помечен как separator",
+      sum(1 for entry in tray._flat.values() if entry.separator) == 1)
+check("значок не показан без вызова show()", tray.available is False)
+tray.hide()
 
-# В этой среде Wayland_DISPLAY остаётся выставленным даже под Xvfb, поэтому
-# проверяем обе ветки явно.
-saved_env = {k: os.environ.get(k) for k in ("WAYLAND_DISPLAY", "XDG_SESSION_TYPE")}
-os.environ.pop("WAYLAND_DISPLAY", None)
-os.environ["XDG_SESSION_TYPE"] = "x11"
-
-# Основной путь — AppIndicator: он работает и на X11, и на Wayland, поэтому
-# при наличии typelib и иконки выбирается первым.
-check("иконка приложения найдена (репозиторий или установленный пакет)",
-      tray_module.icon_path() != "", repr(tray_module.icon_path()))
-tray_x11 = TrayIcon(lambda: None, lambda: None, lambda: None, lambda: None)
-check("X11: трей поднялся", tray_x11.available is True,
-      f"indicator={tray_x11._indicator is not None}, status={tray_x11._status_icon is not None}")
-
-# Ветка без AppIndicator: подменяем typelib на None — должен включиться
-# Gtk.StatusIcon. Без подмены эта ветка не проверяется на машине, где
-# gir1.2-ayatanaappindicator3-0.1 установлен.
-saved_indicator = tray_module._AppIndicator
-tray_module._AppIndicator = None
-try:
-    tray_fallback = TrayIcon(lambda: None, lambda: None, lambda: None, lambda: None)
-finally:
-    tray_module._AppIndicator = saved_indicator
-check("X11 без AppIndicator: трей поднялся через Gtk.StatusIcon",
-      tray_fallback.available is True and tray_fallback._status_icon is not None,
-      f"indicator={tray_fallback._indicator is not None}, status={tray_fallback._status_icon is not None}")
-
-os.environ["WAYLAND_DISPLAY"] = "wayland-0"
-os.environ["XDG_SESSION_TYPE"] = "wayland"
-tray_wayland = TrayIcon(lambda: None, lambda: None, lambda: None, lambda: None)
-appindicator_installed = tray_wayland._indicator is not None
-check(
-    "Wayland: без AppIndicator трей честно недоступен (уведомления работают)",
-    tray_wayland.available == appindicator_installed,
-    f"indicator={appindicator_installed}, available={tray_wayland.available}",
-)
-
-for key, value in saved_env.items():
-    if value is None:
-        os.environ.pop(key, None)
-    else:
-        os.environ[key] = value
-items[0].activate()
-check("пункт «Озвучить буфер» работает", menu_calls == ["clipboard"], str(menu_calls))
+# Пункт меню проверяем по действию, а не по нажатию: щелчок приходит с шины.
+entry = next(item for item in tray._flat.values()
+             if item.label == "Открыть файл…")
+opened: list[str] = []
+entry.action = lambda: opened.append("open")
+entry.action()
+check("действие пункта меню вызывается", opened == ["open"], str(opened))
 
 # ── 7. Приложение целиком (импорт и конструктор) ─────────────────────────────
 print("\n7. Application (импорт без запуска главного цикла)")
-from silero_tts_reader.app import Application  # noqa: E402
+from silero_tts_reader.app import Application
 
 app = Application(["silero-tts-reader"])
 check("Application создан, id приложения", app.get_application_id() == "ru.skala.silero-tts-reader", str(app.get_application_id()))

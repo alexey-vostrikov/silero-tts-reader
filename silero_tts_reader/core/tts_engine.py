@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import re
 import threading
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -246,12 +247,24 @@ class TTSEngine:
                     path=path, lang=lang, parent=path.parent, url=MODELS[lang].url)
             )
 
-        import torch  # noqa: PLC0415 — без torch движок не нужен вовсе
+        import torch
 
         try:
             # Silero распространяет модели как torch.package-архивы
             importer = torch.package.PackageImporter(str(path))
-            model = importer.load_pickle("tts_models", "model")
+            # Предупреждение «TypedStorage is deprecated» выдаёт сам torch:
+            # в package_importer.py он оборачивает legacy-хранилища в
+            # TypedStorage и там же сообщает, что уберёт это в будущем. Наш
+            # код к этому не относится, перепаковать чужую модель нельзя, а в
+            # консоли пользователя строка выглядит как поломка приложения.
+            # Отключаем ровно её и только на время распаковки модели.
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="TypedStorage is deprecated",
+                    category=UserWarning,
+                )
+                model = importer.load_pickle("tts_models", "model")
             # TTSModelMultiAcc_v3 — не nn.Module, .eval() звать нельзя
             speakers = (
                 list(model.speakers)
@@ -292,7 +305,7 @@ class TTSEngine:
     @staticmethod
     def _prepare_text(text: str, profile: ModelProfile | None) -> str:
         """Привести текст к тому, что понимает модель этого языка."""
-        from .text_processor import TextProcessor  # noqa: PLC0415 — тяжёлый импорт
+        from .text_processor import TextProcessor
 
         if profile is not None and profile.transliterate:
             # Русская модель: цифры — словами, латиницу — кириллицей,
@@ -312,7 +325,7 @@ class TTSEngine:
 def _no_grad():
     """torch.no_grad(), если torch есть; иначе пустой контекст (в тестах)."""
     try:
-        import torch  # noqa: PLC0415
+        import torch
     except ImportError:
         yield
         return

@@ -57,6 +57,17 @@ jobs:
           echo "describe: $(git describe --tags --always 2>&1 || true)"
           echo "tags:     $(git tag --list | tr '\n' ' ')"
 
+      - name: Lint and style
+        run: |
+          # Линтер проверяет то, что не видит ни один тест: неопределённые имена,
+          # перекрытые переменные, мёртвый код. Именно он нашёл `len(segment)` в
+          # воркере и перекрытие имени `_` в rate.py.
+          #
+          # Версия закреплена: правила меняются между выпусками, и «зелено
+          # вчера» не значит «зелено сегодня».
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends pipx
+          pipx run ruff==0.17.3 check . --output-format=github
+
       - name: Headless GTK tests
         run: |
           DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \

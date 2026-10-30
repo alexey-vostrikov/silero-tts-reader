@@ -37,12 +37,11 @@ RULES: list[tuple[str, str]] = [
      r'_notify(_("\1")'),
     (rf'add_button\(\s*"([^"\n]*{CYRILLIC}[^"\n]*)"',
      r'add_button(_("\1")'),
-    (rf'set_default_response\(\s*([A-Z_]+\s*)\)', r'set_default_response(\1)'),
+    (r'set_default_response\(\s*([A-Z_]+\s*)\)', r'set_default_response(\1)'),
 ]
 
 TARGETS = [
     "ui/playback_widget.py",
-    "ui/tray_icon.py",
     "ui/settings_window.py",
     "app.py",
     "cli.py",
@@ -72,7 +71,6 @@ def wrap(path: pathlib.Path) -> int:
 
     if text != before:
         path.write_text(text, encoding="utf-8")
-    changed = sum(1 for a, b in zip(before.splitlines(), text.splitlines()) if a != b)
     return len(before.splitlines()) if before != text else 0
 
 

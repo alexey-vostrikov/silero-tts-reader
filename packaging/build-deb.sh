@@ -257,7 +257,7 @@ fi
 
 if ! "\$PYTHON" -c "import gi" 2>/dev/null; then
     echo "silero-tts-reader: не установлен PyGObject." >&2
-    echo "  sudo apt install python3-gi gir1.2-gtk-3.0" >&2
+    echo "  sudo apt install python3-gi gir1.2-gtk-4.0" >&2
     exit 1
 fi
 
@@ -282,12 +282,17 @@ LAUNCHER
 chmod 0755 "$READER_ROOT/usr/bin/$READER"
 
 # .desktop
+# Имя файла обязано совпадать с идентификатором приложения: под Wayland GNOME
+# ищет иконку и .desktop именно по app-id окна. С прежним именем
+# silero-tts-reader.desktop рабочий стол показывал вместо значка «шестерёнку».
+APP_ID=ru.skala.silero-tts-reader
 sed -e 's|^Exec=.*|Exec=silero-tts-reader|' \
     -e 's|^Icon=.*|Icon=silero-tts-reader|' \
-    silero-tts-reader.desktop > "$READER_ROOT/usr/share/applications/$READER.desktop"
-chmod 0644 "$READER_ROOT/usr/share/applications/$READER.desktop"
+    -e "s|^StartupWMClass=.*|StartupWMClass=$APP_ID|" \
+    silero-tts-reader.desktop > "$READER_ROOT/usr/share/applications/$APP_ID.desktop"
+chmod 0644 "$READER_ROOT/usr/share/applications/$APP_ID.desktop"
 # в системный автозапуск пакет не лезет: пользователь решает сам
-sed -i '/^X-GNOME-Autostart-enabled=/d' "$READER_ROOT/usr/share/applications/$READER.desktop"
+sed -i '/^X-GNOME-Autostart-enabled=/d' "$READER_ROOT/usr/share/applications/$APP_ID.desktop"
 
 # Иконки: PIL нужен только для них — берём первый интерпретатор, у которого он есть
 ICON_PY=""
@@ -314,7 +319,7 @@ gzip -9n < README.md > "$READER_ROOT/usr/share/doc/$READER/README.md.gz"
 chmod 0644 "$READER_ROOT/usr/share/doc/$READER/README.md.gz"
 
 build_pkg "$READER" "$READER_ROOT" <<CONTROL
-Depends: $COMMON (= $DEB_VERSION), python3 (>= 3.10), python3-gi, gir1.2-glib-2.0, gir1.2-gtk-3.0, gir1.2-ayatanaappindicator3-0.1, rubberband-cli
+Depends: $COMMON (= $DEB_VERSION), python3 (>= 3.10), python3-gi, gir1.2-glib-2.0, gir1.2-gtk-4.0, libgtk4-layer-shell0, python3-xlib
 Recommends: python3-sounddevice, python3-torch, python3-pynput, python3-evdev, gsettings-desktop-schemas, xdotool, xclip
 Suggests: python3-pyrubberband
 Description: Silero TTS reader with global hotkeys and system tray

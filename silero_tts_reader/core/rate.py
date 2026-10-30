@@ -99,13 +99,14 @@ def time_stretch(samples: np.ndarray, sample_rate: int, speed: float) -> np.ndar
     ``speed`` > 1 — быстрее, < 1 — медленнее. Значения вне 0.5–3.0 обрезаются:
     за этими пределами речь превращается в неразборчивый шум.
     """
+    audio = np.asarray(samples, dtype=np.float32).reshape(-1)
     if not available():
-        raise RuntimeError(
-            "rubberband не найден: sudo apt install rubberband-cli"
-        )
+        # Пакет необязательный: без него речь звучит в обычном темпе, а не
+        # пропадает. Кнопку скорости в интерфейсе в этом случае выключает
+        # SPEED_AVAILABLE, поэтому до растяжения дело не доходит вовсе.
+        return audio
 
     speed = float(max(MIN_SPEED, min(MAX_SPEED, speed)))
-    audio = np.asarray(samples, dtype=np.float32).reshape(-1)
     if audio.size == 0 or abs(speed - 1.0) < 1e-3:
         return audio
 
@@ -127,5 +128,9 @@ def time_stretch(samples: np.ndarray, sample_rate: int, speed: float) -> np.ndar
                     output=(result.stderr or result.stdout).strip()[:200],
                 )
             )
-        stretched, _ = _read_float_wav(target)
+        # Второй элемент — частота из WAV; её не используем, но имя `_`
+        # брать нельзя: оно занято функцией перевода, и присваивание в этой
+        # же функции делает `_` локальной — сообщение об ошибке выше
+        # падало на UnboundLocalError вместо понятного текста.
+        stretched, _disk_rate = _read_float_wav(target)
     return stretched

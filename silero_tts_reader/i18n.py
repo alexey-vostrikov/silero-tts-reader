@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import gettext
 import os
-import re
 from pathlib import Path
 
 DOMAIN = "silero-tts-reader"

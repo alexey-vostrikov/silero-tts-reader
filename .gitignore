@@ -51,3 +51,7 @@ venv.bak/
 
 # Каталог переводов — артефакт сборки (packaging/i18n-build.py)
 locale/
+
+# Отчёты замеров (tools/coverage-crap.sh): покрытие, lcov, CRAP
+target/
+.metrics/

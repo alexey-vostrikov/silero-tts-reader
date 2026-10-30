@@ -14,13 +14,14 @@ import threading
 import time
 import types
 from pathlib import Path
+from typing import ClassVar
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import numpy as np  # noqa: E402
+import numpy as np
 
-from silero_tts_reader.core import audio_player as ap  # noqa: E402
-from silero_tts_reader.core.audio_player import AudioPlayer  # noqa: E402
+from silero_tts_reader.core import audio_player as ap
+from silero_tts_reader.core.audio_player import AudioPlayer
 
 CHECKS = 0
 
@@ -37,7 +38,7 @@ class FakeStream:
     """Поток-заглушка: считает открытия и запоминает записанное."""
 
     opened = 0
-    written: list[np.ndarray] = []
+    written: ClassVar[list[np.ndarray]] = []
 
     def __init__(self, **kwargs) -> None:
         # Настоящий OutputStream принимает samplerate/channels/dtype
@@ -163,11 +164,47 @@ def test_overall_progress() -> None:
     check(ap.SEGMENT_GAP_MS == 180, "пауза между фразами — 180 мс")
 
 
+def test_speed_control_disabled() -> None:
+    """Без rubberband кнопка скорости выключена, а не прячется и не падает.
+
+    Пакет необязательный: без него приложение обязано работать, просто темп
+    не поменять. Выключенный элемент управления говорит об этом честнее, чем
+    ошибка при нажатии.
+    """
+    print("\n4. Скорость без rubberband")
+    try:
+        import gi
+
+        gi.require_version("Gtk", "4.0")
+        from gi.repository import Gtk
+        if not Gtk.init_check():
+            raise RuntimeError("нет дисплея")
+    except Exception as exc:
+        print(f"  — пропущено: {exc}")
+        return
+
+    from silero_tts_reader.ui import playback_widget as pw
+
+    saved = pw.SPEED_AVAILABLE
+    pw.SPEED_AVAILABLE = False
+    try:
+        widget = pw.PlaybackWidget()
+        check(widget._speed_combo.get_sensitive() is False,
+              "список скорости выключен")
+        check("rubberband" in (widget._speed_combo.get_tooltip_text() or ""),
+              "подсказка называет причину: "
+              f"{widget._speed_combo.get_tooltip_text()}")
+        widget.destroy()
+    finally:
+        pw.SPEED_AVAILABLE = saved
+
+
 def main() -> int:
     print("Проигрывание: поток, пауза, прогресс")
     test_single_stream()
     test_gap_between_quanta()
     test_overall_progress()
+    test_speed_control_disabled()
     print(f"\nвсе проверки пройдены: {CHECKS}")
     return 0
 

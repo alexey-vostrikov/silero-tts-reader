@@ -2,8 +2,8 @@
 import sys
 
 from silero_tts_reader import build_info, instance
-from silero_tts_reader.i18n import _
 from silero_tts_reader.app import Application
+from silero_tts_reader.i18n import _
 
 
 def main() -> None:

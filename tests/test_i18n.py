@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from silero_tts_reader import i18n  # noqa: E402
+from silero_tts_reader import i18n
 
 CHECKS = 0
 MO = Path(__file__).resolve().parent.parent / "locale" / "en_US" / "LC_MESSAGES" / "silero-tts-reader.mo"
