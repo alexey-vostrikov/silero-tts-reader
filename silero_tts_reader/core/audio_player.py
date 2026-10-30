@@ -6,7 +6,6 @@ import threading
 from typing import Callable
 
 import numpy as np
-import sounddevice as sd
 
 from . import rate as rate_module
 from .tts_worker import TTSWorker
@@ -17,6 +16,21 @@ from .tts_worker import TTSWorker
 # установленной системе регулировка скорости молча не работала.
 _SPEED_AVAILABLE = rate_module.available()
 SPEED_AVAILABLE = _SPEED_AVAILABLE
+
+_sounddevice = None
+
+
+def _sd():
+    """sounddevice по требованию: без PortAudio модуль должен импортироваться.
+
+    Раньше импорт на уровне модуля делал неимпортируемым всё приложение в
+    headless-окружении (CI, сервер), хотя звук там и не нужен.
+    """
+    global _sounddevice
+    if _sounddevice is None:
+        import sounddevice  # noqa: PLC0415
+        _sounddevice = sounddevice
+    return _sounddevice
 
 
 class AudioPlayer(threading.Thread):
@@ -153,7 +167,7 @@ class AudioPlayer(threading.Thread):
         total_samples = len(audio)
         pos = 0
 
-        with sd.OutputStream(
+        with _sd().OutputStream(
             samplerate=self._sample_rate,
             channels=1,
             dtype="float32",
