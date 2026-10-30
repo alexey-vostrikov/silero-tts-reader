@@ -2,25 +2,21 @@
 from __future__ import annotations
 
 import queue
-import shutil
 import threading
 from typing import Callable
 
 import numpy as np
 import sounddevice as sd
 
+from . import rate as rate_module
 from .tts_worker import TTSWorker
 
 
-# Check rubberband availability at import time
-_RUBBERBAND_AVAILABLE = shutil.which("rubberband") is not None
-try:
-    import pyrubberband  # noqa: F401
-    _PYRUBBERBAND_AVAILABLE = True
-except ImportError:
-    _PYRUBBERBAND_AVAILABLE = False
-
-SPEED_AVAILABLE = _RUBBERBAND_AVAILABLE and _PYRUBBERBAND_AVAILABLE
+# Скорость меняет rubberband-cli: он в зависимостях пакета, а Python-обёртка
+# pyrubberband в архиве Ubuntu отсутствует. Раньше требовались оба, поэтому в
+# установленной системе регулировка скорости молча не работала.
+_SPEED_AVAILABLE = rate_module.available()
+SPEED_AVAILABLE = _SPEED_AVAILABLE
 
 
 class AudioPlayer(threading.Thread):
@@ -194,16 +190,5 @@ class AudioPlayer(threading.Thread):
                     self._on_segment_progress(min(pos / total_samples, 1.0))
 
     def _stretch(self, audio: np.ndarray, speed: float) -> np.ndarray:
-        """Time-stretch audio to change speed without affecting pitch.
-
-        pyrubberband.time_stretch(y, sr, rate):
-        rate > 1.0 speeds up, rate < 1.0 slows down.
-        """
-        import pyrubberband as rb  # noqa: PLC0415
-        # rubberband time_stretch expects (samples,) float64
-        stretched = rb.time_stretch(
-            audio.astype(np.float64),
-            self._sample_rate,
-            float(speed),
-        )
-        return stretched.astype(np.float32)
+        """Изменить скорость, не меняя тон: speed > 1 быстрее, < 1 медленнее."""
+        return rate_module.time_stretch(audio, self._sample_rate, float(speed))
