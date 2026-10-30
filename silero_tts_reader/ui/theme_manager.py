@@ -1,16 +1,18 @@
-"""Менеджер темы — системная тёмная/светлая тема и акцентный цвет (GTK/GNOME).
+"""Менеджер темы — системная тёмная/светлая тема и акцентный цвет (GTK4/GNOME).
 
 Версия для PyGObject: вместо ``pyqtSignal`` — сигналы ``GObject``, вместо
 ``QDBusConnection`` — ``Gio.DBusProxy``, вместо ``QColor`` — строка ``#rrggbb``.
 Все методы возвращают цвета строками, чтобы их можно было подставлять в CSS GTK.
+
+GTK здесь не используется вообще (только Gio/GLib/GObject), поэтому версия
+Gtk не запрашивается: ``gi.require_version`` упал бы, если процесс уже загрузил
+другую версию (это и случилось при переходе на GTK4).
 """
 from __future__ import annotations
 
 import subprocess
 
 import gi
-
-gi.require_version("Gtk", "3.0")
 
 from gi.repository import Gio, GLib, GObject  # noqa: E402
 

@@ -28,6 +28,8 @@ import wave
 from pathlib import Path
 
 from .config.config_manager import ConfigManager
+from . import i18n
+from .i18n import _
 from .core import rate as rate_module
 from .models import DEFAULT_LANG, MODELS, split_by_script
 
@@ -78,8 +80,8 @@ def _list_voices(engine, requested: str | None) -> int:
     for lang in languages:
         speakers = engine.get_available_speakers(lang)
         if not speakers:
-            print(f"{lang}: модель не установлена "
-                  f"(silero-tts-model download {lang})", file=sys.stderr)
+            print(_("{lang}: модель не установлена (silero-tts-model download {lang})")
+                  .format(lang=lang), file=sys.stderr)
             continue
         print(f"[{lang}]")
         print("\n".join(speakers))
@@ -90,27 +92,29 @@ def _list_voices(engine, requested: str | None) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="silero-tts-speak",
-        description="Синтез речи Silero TTS из командной строки (для speech-dispatcher).",
+        description=_("Синтез речи Silero TTS из командной строки (для speech-dispatcher)."),
     )
-    parser.add_argument("text", nargs="*", help="текст; «-» или пусто — читать stdin")
-    parser.add_argument("--voice", "-v", default=None, help="голос (xenia, aidar, en_0...)")
+    parser.add_argument("text", nargs="*", help=_("текст; «-» или пусто — читать stdin"))
+    parser.add_argument("--voice", "-v", default=None, help=_("голос (xenia, aidar, en_0...)"))
     parser.add_argument("--lang", "-L", default=None,
-                        help=f"язык: auto, {', '.join(MODELS)} (по умолчанию из конфига)")
+                        help=_("язык: auto, {languages} (по умолчанию из конфига)").format(
+                            languages=", ".join(MODELS)))
     parser.add_argument("--rate", "-r", type=float, default=None,
-                        help="скорость речи 0.5–3.0 (1.0 — как есть)")
+                        help=_("скорость речи 0.5–3.0 (1.0 — как есть)"))
     parser.add_argument("--spd-rate", type=float, default=None, metavar="N",
-                        help="скорость в шкале speech-dispatcher: -100…+100 "
-                             "(приходит как 0.00, поэтому принимаем float)")
-    parser.add_argument("--wav-out", "-o", default=None, help="записать WAV, не воспроизводить")
+                        help=_("скорость в шкале speech-dispatcher: -100…+100 "
+                                  "(приходит как 0.00, поэтому принимаем float)"))
+    parser.add_argument("--wav-out", "-o", default=None, help=_("записать WAV, не воспроизводить"))
     parser.add_argument("--model", default=None,
-                        help="путь к русской модели (переопределяет конфиг)")
+                        help=_("путь к русской модели (переопределяет конфиг)"))
     parser.add_argument("--mixed", "-M", action="store_true",
-                        help="переключать язык по письменности: латиница — английской моделью, "
-                             "кириллица — русской")
-    parser.add_argument("--list-voices", action="store_true", help="показать голоса и выйти")
+                        help=_("переключать язык по письменности: латиница — английской "
+                                  "моделью, кириллица — русской"))
+    parser.add_argument("--list-voices", action="store_true", help=_("показать голоса и выйти"))
     args = parser.parse_args(argv)
 
     config = ConfigManager()
+    i18n.init(config.ui_language)
     models = dict(config.models)
     if args.model:
         models[DEFAULT_LANG] = args.model
@@ -121,8 +125,8 @@ def main(argv: list[str] | None = None) -> int:
         import torch  # noqa: F401
     except ImportError as exc:
         return _fail(
-            f"не хватает Python-модуля: {exc.name}. Установите: "
-            "sudo apt install python3-torch python3-numpy"
+            _("не хватает Python-модуля: {module}. Установите: "
+              "sudo apt install python3-torch python3-numpy").format(module=exc.name)
         )
 
     from .core.tts_engine import TTSEngine, TTSLoadError
@@ -141,7 +145,11 @@ def main(argv: list[str] | None = None) -> int:
     if not text:
         return _fail("пустой текст")
     if len(text) > MAX_CHARS:
-        return _fail(f"слишком длинный текст: {len(text)} символов (лимит {MAX_CHARS})")
+        return _fail(
+            _("слишком длинный текст: {count} символов (лимит {limit})").format(
+                count=len(text), limit=MAX_CHARS
+            )
+        )
 
     mixed = args.mixed or bool(config.mixed)
     language = engine.resolve_language(text, requested)
@@ -154,10 +162,12 @@ def main(argv: list[str] | None = None) -> int:
     if mixed and len(split_by_script(text)) > 1:
         plan = ", ".join(f"{lang or 'default'}: {chunk[:24]!r}"
                          for lang, chunk in split_by_script(text))
-        print(f"silero-tts-speak: смешанный текст, голос {voice} → {plan}", file=sys.stderr)
+        print(_("silero-tts-speak: смешанный текст, голос {voice} → {plan}").format(
+            voice=voice, plan=plan), file=sys.stderr)
     else:
         mixed = False
-        print(f"silero-tts-speak: язык {language}, голос {voice}", file=sys.stderr)
+        print(_("silero-tts-speak: язык {language}, голос {voice}").format(
+            language=language, voice=voice), file=sys.stderr)
 
     speed = _resolve_speed(args, config)
 
@@ -174,7 +184,7 @@ def main(argv: list[str] | None = None) -> int:
                 audio = None
     except Exception as exc:  # noqa: BLE001 — любое падение синтеза объясняем словами
         print(loud.getvalue(), file=sys.stderr)
-        return _fail(f"ошибка синтеза: {exc}")
+        return _fail(_("ошибка синтеза: {error}").format(error=exc))
 
     import numpy as np
 
@@ -184,9 +194,11 @@ def main(argv: list[str] | None = None) -> int:
     if abs(speed - 1.0) > 1e-3:
         try:
             audio = rate_module.time_stretch(audio, engine.sample_rate, speed)
-            print(f"silero-tts-speak: скорость {speed:.2f}×", file=sys.stderr)
+            print(_("silero-tts-speak: скорость {speed:.2f}×").format(
+                speed=speed), file=sys.stderr)
         except Exception as exc:  # noqa: BLE001 — без rubberband говорим как есть
-            print(f"silero-tts-speak: скорость недоступна — {exc}", file=sys.stderr)
+            print(_("silero-tts-speak: скорость недоступна — {error}").format(
+                error=exc), file=sys.stderr)
 
     if args.wav_out:
         _write_wav(Path(args.wav_out), audio, engine.sample_rate)
@@ -200,12 +212,13 @@ def main(argv: list[str] | None = None) -> int:
             "или используйте --wav-out"
         )
     except Exception as exc:  # noqa: BLE001 — PortAudio без звукового сервера
-        return _fail(f"sounddevice не инициализируется: {exc}")
+        return _fail(_("sounddevice не инициализируется: {error}").format(error=exc))
 
     try:
         _play(audio, engine.sample_rate)
     except Exception as exc:  # noqa: BLE001 — нет звукового сервера или устройства
-        return _fail(f"не удалось воспроизвести: {exc} (или используйте --wav-out)")
+        return _fail(_("не удалось воспроизвести: {error} (или используйте --wav-out)")
+                     .format(error=exc))
     return 0
 
 

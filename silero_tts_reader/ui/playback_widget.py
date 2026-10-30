@@ -17,6 +17,7 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 from ..core.audio_player import SPEED_AVAILABLE
+from ..i18n import _
 
 WIDGET_WIDTH = 360
 WIDGET_HEIGHT = 95
@@ -65,16 +66,14 @@ class ProgressBar(Gtk.DrawingArea):
         height = self.get_allocated_height()
         radius = height / 2
 
-        # фон-дорожка
+        cr.set_source_rgba(*self._rgba(self._track))
         self._rounded_rect(cr, 0, 0, width, height, radius)
-        Gdk.cairo_set_source_rgba(cr, self._rgba(self._track))
         cr.fill()
 
-        # заполненная часть
         if self._fraction > 0:
             filled = max(radius * 2, width * self._fraction)
             self._rounded_rect(cr, 0, 0, filled, height, radius)
-            Gdk.cairo_set_source_rgba(cr, self._rgba(self._fill))
+            cr.set_source_rgba(*self._rgba(self._fill))
             cr.fill()
         return False
 
@@ -176,6 +175,7 @@ class PlaybackWidget(Gtk.Window):
         # Перетаскивание за свободное место окна
         self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
         self.connect("button-press-event", self._on_background_press)
+        self.connect("draw", self._on_draw)
 
     def _setup_ui(self) -> None:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -188,38 +188,39 @@ class PlaybackWidget(Gtk.Window):
         # ── Верхний ряд: заголовок и кнопки ──────────────────────────────────
         top_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         box.pack_start(top_row, False, False, 0)
+        self._top_row = top_row
 
-        self._label = Gtk.Label(label="🔊 Воспроизведение")
+        self._label = Gtk.Label(label=_("🔊 Воспроизведение"))
         self._label.set_xalign(0.0)
         top_row.pack_start(self._label, False, False, 0)
         top_row.pack_start(Gtk.Box(), True, True, 0)  # растяжка
 
-        self._btn_rewind = self._make_button("◀◀", "Назад на 5 секунд", "playback-neutral")
+        self._btn_rewind = self._make_button("◀◀", _("Назад на 5 секунд"), "playback-neutral")
         self._btn_rewind.connect("clicked", lambda _b: self._emit_rewind(-5.0))
         top_row.pack_start(self._btn_rewind, False, False, 0)
 
-        self._btn_pause = self._make_button("⏸", "Пауза / Продолжить", "playback-accent")
+        self._btn_pause = self._make_button("⏸", _("Пауза / Продолжить"), "playback-accent")
         self._btn_pause.connect("clicked", lambda _b: self._on_pause_resume_clicked())
         top_row.pack_start(self._btn_pause, False, False, 0)
 
-        self._btn_forward = self._make_button("▶▶", "Вперёд на 5 секунд", "playback-neutral")
+        self._btn_forward = self._make_button("▶▶", _("Вперёд на 5 секунд"), "playback-neutral")
         self._btn_forward.connect("clicked", lambda _b: self._emit_rewind(5.0))
         top_row.pack_start(self._btn_forward, False, False, 0)
 
-        self._btn_stop = self._make_button("⏹", "Остановить", "playback-danger")
+        self._btn_stop = self._make_button("⏹", _("Остановить"), "playback-danger")
         self._btn_stop.connect("clicked", lambda _b: self._on_stop_clicked())
         top_row.pack_start(self._btn_stop, False, False, 0)
 
         # ── Полоса прогресса ─────────────────────────────────────────────────
         self._progress = ProgressBar(self._on_timeline_clicked)
-        self._progress.set_tooltip_text("Нажмите для перемотки")
+        self._progress.set_tooltip_text(_("Нажмите для перемотки"))
         box.pack_start(self._progress, False, False, 0)
 
         # ── Нижний ряд: скорость ─────────────────────────────────────────────
         bottom_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         box.pack_start(bottom_row, False, False, 0)
 
-        self._speed_title = Gtk.Label(label="Скорость:")
+        self._speed_title = Gtk.Label(label=_("Скорость:"))
         self._speed_title.set_xalign(0.0)
         bottom_row.pack_start(self._speed_title, False, False, 0)
 
@@ -227,7 +228,7 @@ class PlaybackWidget(Gtk.Window):
         self._speed_slider = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.5, 3.0, 0.25)
         self._speed_slider.set_draw_value(False)
         self._speed_slider.set_value(1.0)
-        self._speed_slider.set_tooltip_text("Скорость воспроизведения")
+        self._speed_slider.set_tooltip_text(_("Скорость воспроизведения"))
         self._speed_slider.set_sensitive(SPEED_AVAILABLE)
         self._speed_slider.connect("value-changed", self._on_speed_changed)
         bottom_row.pack_start(self._speed_slider, True, True, 0)
@@ -237,9 +238,28 @@ class PlaybackWidget(Gtk.Window):
         bottom_row.pack_start(self._speed_value, False, False, 0)
 
         if not SPEED_AVAILABLE:
-            no_rb = Gtk.Label(label="(rubberband не найден)")
+            no_rb = Gtk.Label(label=_("(rubberband не найден)"))
             no_rb.set_name("playback-warning")
             bottom_row.pack_start(no_rb, False, False, 0)
+
+    def set_menu_model(self, model) -> None:
+        """Кнопка меню в виджете: те же действия, что и у клавиш.
+
+        Модель приходит из приложения (``app.*``), поэтому в окне не нужен
+        собственный набор действий — достаточно, чтобы окно было привязано к
+        приложению (``Gtk.Application.add_window``).
+        """
+        if model is None:
+            return
+        button = Gtk.MenuButton()
+        button.set_menu_model(model)
+        button.set_tooltip_text(_("Меню"))
+        button.set_size_request(30, 30)
+        # GTK3: класс ставится через StyleContext (add_css_class — это уже GTK4)
+        button.get_style_context().add_class("playback-neutral")
+        self._top_row.pack_start(button, False, False, 0)
+        button.show()
+        self._menu_button = button
 
     def _make_button(self, label: str, tooltip: str, css_class: str) -> Gtk.Button:
         btn = Gtk.Button(label=label)
@@ -352,11 +372,12 @@ class PlaybackWidget(Gtk.Window):
             """.encode("utf-8")
         )
 
-        if is_dark:
-            self._label.set_markup(f'<span foreground="{fg}" size="small" weight="bold">🔊 Воспроизведение</span>')
-        else:
-            self._label.set_markup(f'<span foreground="{fg}" size="small" weight="bold">🔊 Воспроизведение</span>')
-        self._speed_title.set_markup(f'<span foreground="{muted}" size="small">Скорость:</span>')
+        # Цвет берётся из fg, поэтому ветки одинаковы — раньше во второй
+        # оставалась непереведённая строка.
+        self._label.set_markup(
+            f'<span foreground="{fg}" size="small" weight="bold">{_("🔊 Воспроизведение")}</span>'
+        )
+        self._speed_title.set_markup(f'<span foreground="{muted}" size="small">{_("Скорость:")}</span>')
         self._speed_value.set_markup(f'<span foreground="{fg}" size="small">{self._speed_slider.get_value():.2g}×</span>')
 
         self._progress.apply_theme(track, accent_color)
@@ -366,7 +387,13 @@ class PlaybackWidget(Gtk.Window):
 
     # ── Отрисовка фона окна ──────────────────────────────────────────────────
 
-    def do_draw(self, cr) -> bool:  # noqa: N802
+    def _on_draw(self, _widget, cr) -> bool:
+        """Нарисовать скруглённый фон ПОД содержимым.
+
+        Именно сигнал ``draw``: у Gtk.Window хук ``do_draw`` и есть отрисовка
+        детей, и переопределение его своими руками оставляло окно пустым —
+        фон рисовался, а метки и кнопки пропадали.
+        """
         width = self.get_allocated_width()
         height = self.get_allocated_height()
 
@@ -457,7 +484,7 @@ class PlaybackWidget(Gtk.Window):
     def set_paused(self, paused: bool) -> None:
         self._is_paused = paused
         self._btn_pause.set_label("▶" if paused else "⏸")
-        self._label.set_text("⏸ Пауза" if paused else "🔊 Воспроизведение")
+        self._label.set_text(_("⏸ Пауза") if paused else _("🔊 Воспроизведение"))
 
     def set_speed(self, speed: float) -> None:
         clamped = max(0.5, min(3.0, round(float(speed) / 0.25) * 0.25))
