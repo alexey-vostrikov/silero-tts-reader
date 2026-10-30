@@ -554,6 +554,42 @@ class SettingsWindow(Gtk.Dialog):
             no_rb.set_name("hint")
             speed_row.pack_start(no_rb, False, False, 0)
 
+        # ── Паузы ────────────────────────────────────────────────────────────
+        pause_group = Gtk.Frame(label=_("ПАУЗЫ"))
+        pause_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        pause_box.set_border_width(10)
+        pause_group.add(pause_box)
+        page.pack_start(pause_group, False, False, 0)
+
+        def add_pause_row(title: str, hint: str, value: int, limit: int):
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            label = Gtk.Label(label=title)
+            label.set_xalign(0.0)
+            label.set_tooltip_text(hint)
+            row.pack_start(label, False, False, 0)
+            row.pack_start(Gtk.Box(), True, True, 0)
+            spin = Gtk.SpinButton.new_with_range(0, limit, 50)
+            spin.set_value(value)
+            spin.set_tooltip_text(hint)
+            spin.set_width_chars(5)
+            row.pack_start(spin, False, False, 0)
+            row.pack_start(Gtk.Label(label=_("мс")), False, False, 0)
+            pause_box.pack_start(row, False, False, 0)
+            return spin
+
+        self._pause_dialogue_spin = add_pause_row(
+            _("Перед репликой:"),
+            _("Тишина перед прямой речью, начинающейся с тире"),
+            self._config.pause_dialogue_ms,
+            5000,
+        )
+        self._pause_paragraph_spin = add_pause_row(
+            _("Между абзацами:"),
+            _("Тишина на границе абзацев и перед заголовком главы"),
+            self._config.pause_paragraph_ms,
+            5000,
+        )
+
         page.pack_start(Gtk.Box(), True, True, 0)
         return page
 
@@ -863,6 +899,12 @@ class SettingsWindow(Gtk.Dialog):
             self._config.hotkey_speak_clipboard = self._hk_clipboard.get_hotkey()
         if hasattr(self, "_hk_stop"):
             self._config.hotkey_stop = self._hk_stop.get_hotkey()
+
+        # Паузы
+        if hasattr(self, "_pause_dialogue_spin"):
+            self._config.pause_dialogue_ms = int(self._pause_dialogue_spin.get_value())
+        if hasattr(self, "_pause_paragraph_spin"):
+            self._config.pause_paragraph_ms = int(self._pause_paragraph_spin.get_value())
 
         # ИИ и транслитерация
         self._config.ignore_urls = self._chk_ignore_urls.get_active()

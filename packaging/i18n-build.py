@@ -218,6 +218,17 @@ TRANSLATIONS = {
 
     "Сброс настроек": "Reset settings",
     "Ошибка TTS": "TTS error",
+    "Пауза": "Paused",
+    "ПАУЗЫ": "PAUSES",
+    "мс": "ms",
+    "Перед репликой:": "Before a replica:",
+    "Тишина перед прямой речью, начинающейся с тире":
+        "Silence before direct speech that starts with a dash",
+    "Между абзацами:": "Between paragraphs:",
+    "Тишина на границе абзацев и перед заголовком главы":
+        "Silence at a paragraph boundary and before a chapter heading",
+    "Скорость недоступна: не найден rubberband":
+        "Speed is unavailable: rubberband was not found",
     "{version} от {moment}{suffix}": "{version} of {moment}{suffix}",
 
     # консоль приложения и сообщения движка

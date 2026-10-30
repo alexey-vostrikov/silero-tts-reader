@@ -48,6 +48,11 @@ DEFAULTS: dict[str, Any] = {
     },
     "playback": {
         "speed": 1.0,
+        # Пауза перед репликой диалога: без неё «Глава 1» и «- Ну Лёха…»
+        # сливаются в одну фразу.
+        "pause_dialogue_ms": 700,
+        # Пауза между абзацами: граница абзаца должна слышаться.
+        "pause_paragraph_ms": 400,
     },
     "widget": {
         "position_x": -1,   # -1 = auto (bottom-right)
@@ -259,6 +264,24 @@ class ConfigManager:
     @speed.setter
     def speed(self, v: float) -> None:
         self.set("playback", "speed", round(float(v), 2))
+
+    @property
+    def pause_dialogue_ms(self) -> int:
+        """Пауза перед репликой диалога, мс."""
+        return int(self.get("playback", "pause_dialogue_ms", default=700))
+
+    @pause_dialogue_ms.setter
+    def pause_dialogue_ms(self, v: int) -> None:
+        self.set("playback", "pause_dialogue_ms", max(0, min(5000, int(v))))
+
+    @property
+    def pause_paragraph_ms(self) -> int:
+        """Пауза между абзацами, мс."""
+        return int(self.get("playback", "pause_paragraph_ms", default=400))
+
+    @pause_paragraph_ms.setter
+    def pause_paragraph_ms(self, v: int) -> None:
+        self.set("playback", "pause_paragraph_ms", max(0, min(5000, int(v))))
 
     @property
     def widget_position(self) -> tuple[int, int]:
