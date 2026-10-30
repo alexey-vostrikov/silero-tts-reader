@@ -149,11 +149,36 @@ COMMON_ROOT="$(root_of "$COMMON")"
 install -d "$COMMON_ROOT/DEBIAN" \
     "$COMMON_ROOT$APP_ROOT/silero_tts_reader" \
     "$COMMON_ROOT/usr/bin"
-cp -a silero_tts_reader/__init__.py silero_tts_reader/models.py \
-    silero_tts_reader/config silero_tts_reader/core \
+cp -a silero_tts_reader/__init__.py silero_tts_reader/i18n.py \
+    silero_tts_reader/build_info.py silero_tts_reader/instance.py \
+    silero_tts_reader/models.py silero_tts_reader/config silero_tts_reader/core \
     "$COMMON_ROOT$APP_ROOT/silero_tts_reader/"
 find "$COMMON_ROOT$APP_ROOT" -name '__pycache__' -type d -prune -exec rm -rf {} +
 find "$COMMON_ROOT$APP_ROOT" -name '*.py[co]' -delete
+# Переводы интерфейса: /usr/share/locale/<lang>/LC_MESSAGES/<domain>.mo
+#
+# Каталог переводов — артефакт сборки, в git его нет. Генерируем здесь же:
+# иначе пакет молча уедет без перевода, а на чистой машине сборки не будет
+# и .pot. Нет msgfmt — падаем громко, а не собираем пакет без локализации.
+if command -v msgfmt >/dev/null 2>&1; then
+    python3 packaging/i18n-wrap.py >/dev/null
+    python3 packaging/i18n-build.py >/dev/null
+else
+    echo "нет msgfmt (пакет gettext): без него не собрать переводы" >&2
+    exit 1
+fi
+[[ -d locale/en_US/LC_MESSAGES ]] || { echo "каталог переводов не создан" >&2; exit 1; }
+
+install -d "$COMMON_ROOT/usr/share/locale"
+for po_dir in locale/*/LC_MESSAGES; do
+    [[ -d "$po_dir" ]] || continue
+    lang="$(basename "$(dirname "$po_dir")")"
+    mo="$po_dir/${COMMON}.mo"
+    [[ -f "$mo" ]] || mo="$po_dir/silero-tts-reader.mo"
+    [[ -f "$mo" ]] || { echo "нет .mo в $po_dir (соберите packaging/i18n-build.py)" >&2; exit 1; }
+    install -Dm644 "$mo" "$COMMON_ROOT/usr/share/locale/$lang/LC_MESSAGES/silero-tts-reader.mo"
+done
+
 cat > "$COMMON_ROOT/usr/bin/silero-tts-model" <<MODEL_BIN
 #!/bin/sh
 # Модели Silero: что установлено, что скачать (list/download/path).
@@ -167,14 +192,28 @@ PYTHONPATH="\$APP_DIR\${PYTHONPATH:+:\$PYTHONPATH}" exec "\$PYTHON" -m silero_tt
 MODEL_BIN
 chmod 0755 "$COMMON_ROOT/usr/bin/silero-tts-model"
 
+# Метка сборки: по ней новый запуск понимает, что работающий экземпляр старше.
+# Версия пакета для этого не годится — при правке кода без смены тега она та же.
+cat > "$COMMON_ROOT$APP_ROOT/build-info.json" <<BUILDINFO
+{
+  "version": "$DEB_VERSION",
+  "build_time": $(date +%s),
+  "build_date": "$(date -R)",
+  "commit": "$(git log -1 --format='%h %s' 2>/dev/null || echo 'from sources')"
+}
+BUILDINFO
+chmod 0644 "$COMMON_ROOT$APP_ROOT/build-info.json"
+
 add_docs "$COMMON_ROOT" "$COMMON"
 
 build_pkg "$COMMON" "$COMMON_ROOT" <<CONTROL
 Depends: python3 (>= 3.10), python3-numpy, python3-scipy
-Recommends: python3-sounddevice, python3-torch, python3-pynput
+Recommends: python3-sounddevice, python3-torch, python3-pynput, zstd
 Suggests: python3-pyrubberband
 Description: Silero TTS shared settings, configuration and synthesis engine
- Common part of the Silero TTS packages: the configuration file manager
+ Common part of the Silero TTS packages: interface translations (ru_RU is the
+ source language, en_US ships as a gettext catalog), the configuration file
+ manager
  (~/.config/silero-tts-reader/config.json), the multi-language model registry
  (~/.local/share/silero-tts-reader), the synthesis engine with text
  segmentation, and silero-tts-model for listing and downloading models.
