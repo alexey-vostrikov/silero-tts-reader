@@ -147,11 +147,26 @@ build_pkg() {
 # ═══ 1. silero-tts-common: настройки, конфиги, движок ═════════════════════════
 COMMON_ROOT="$(root_of "$COMMON")"
 install -d "$COMMON_ROOT/DEBIAN" \
-    "$COMMON_ROOT$APP_ROOT/silero_tts_reader"
-cp -a silero_tts_reader/__init__.py silero_tts_reader/config silero_tts_reader/core \
+    "$COMMON_ROOT$APP_ROOT/silero_tts_reader" \
+    "$COMMON_ROOT/usr/bin"
+cp -a silero_tts_reader/__init__.py silero_tts_reader/models.py \
+    silero_tts_reader/config silero_tts_reader/core \
     "$COMMON_ROOT$APP_ROOT/silero_tts_reader/"
 find "$COMMON_ROOT$APP_ROOT" -name '__pycache__' -type d -prune -exec rm -rf {} +
 find "$COMMON_ROOT$APP_ROOT" -name '*.py[co]' -delete
+cat > "$COMMON_ROOT/usr/bin/silero-tts-model" <<MODEL_BIN
+#!/bin/sh
+# Модели Silero: что установлено, что скачать (list/download/path).
+APP_DIR="$APP_ROOT"
+PYTHON="\${SILERO_TTS_PYTHON:-/usr/bin/python3}"
+if [ ! -f "\$APP_DIR/silero_tts_reader/models.py" ]; then
+    echo "silero-tts-model: не найден код в \$APP_DIR (пакет silero-tts-common)" >&2
+    exit 1
+fi
+PYTHONPATH="\$APP_DIR\${PYTHONPATH:+:\$PYTHONPATH}" exec "\$PYTHON" -m silero_tts_reader.models "\$@"
+MODEL_BIN
+chmod 0755 "$COMMON_ROOT/usr/bin/silero-tts-model"
+
 add_docs "$COMMON_ROOT" "$COMMON"
 
 build_pkg "$COMMON" "$COMMON_ROOT" <<CONTROL
@@ -160,10 +175,14 @@ Recommends: python3-sounddevice, python3-torch, python3-pynput
 Suggests: python3-pyrubberband
 Description: Silero TTS shared settings, configuration and synthesis engine
  Common part of the Silero TTS packages: the configuration file manager
- (~/.config/silero-tts-reader/config.json), the model path conventions
- (~/.local/share/silero-tts-reader) and the Silero v5 synthesis engine with
- text segmentation. Contains no user interface: the GTK application lives in
- silero-tts-reader, the command line tool in silero-tts-speechd.
+ (~/.config/silero-tts-reader/config.json), the multi-language model registry
+ (~/.local/share/silero-tts-reader), the synthesis engine with text
+ segmentation, and silero-tts-model for listing and downloading models.
+ Contains no user interface: the GTK application lives in silero-tts-reader,
+ the command line tool in silero-tts-speechd.
+ .
+ Русская модель v5_ru.pt ставится отдельно и в пакет не входит; английская
+ (v3_en.pt, 55 МБ) качается командой silero-tts-model download en.
 CONTROL
 
 # ═══ 2. silero-tts-reader: GTK-приложение ═════════════════════════════════════

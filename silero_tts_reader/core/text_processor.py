@@ -185,6 +185,62 @@ class TextProcessor:
         return bool(re.search(r"[a-zA-Z]", text))
 
     @staticmethod
+    def digits_to_words_en(text: str) -> str:
+        """Развернуть числа в английские слова — для нерусских моделей.
+
+        Английская v3 читает латиницу сама, но цифры ей нужно подавать словами.
+        Дробные числа и разряды поддерживаются до миллионов: этого достаточно
+        для озвучки текста, а не для бухгалтерии.
+        """
+        if not text or not re.search(r"\d", text):
+            return text
+
+        ones = ("zero", "one", "two", "three", "four", "five", "six", "seven",
+                "eight", "nine", "ten", "eleven", "twelve", "thirteen",
+                "fourteen", "fifteen", "sixteen", "seventeen", "eighteen",
+                "nineteen")
+        tens = ("", "", "twenty", "thirty", "forty", "fifty", "sixty",
+                "seventy", "eighty", "ninety")
+
+        def under_thousand(value: int) -> str:
+            words: list[str] = []
+            if value >= 100:
+                words.append(f"{ones[value // 100]} hundred")
+                value %= 100
+            if value >= 20:
+                words.append(tens[value // 10] + (f"-{ones[value % 10]}" if value % 10 else ""))
+            elif value:
+                words.append(ones[value])
+            return " ".join(words)
+
+        def integer_words(value: int) -> str:
+            if value == 0:
+                return ones[0]
+            parts: list[str] = []
+            for divisor, name in ((1_000_000_000, "billion"), (1_000_000, "million"),
+                                  (1_000, "thousand")):
+                if value >= divisor:
+                    parts.append(f"{under_thousand(value // divisor)} {name}")
+                    value %= divisor
+            if value:
+                parts.append(under_thousand(value))
+            return " ".join(parts)
+
+        def replace_number(match: re.Match) -> str:
+            raw = match.group(0).replace(",", "")
+            try:
+                if "." in raw:
+                    whole, _, frac = raw.partition(".")
+                    spoken = f"{integer_words(int(whole))} point " + " ".join(
+                        ones[int(digit)] for digit in frac)
+                    return spoken
+                return integer_words(int(raw))
+            except (ValueError, IndexError):
+                return match.group(0)
+
+        return re.sub(r"\d[\d,]*(?:\.\d+)?", replace_number, text)
+
+    @staticmethod
     def transliterate_offline(text: str) -> str:
         """Fast offline rule- and dictionary-based transliteration of Latin words."""
         def _replace_word(match: re.Match) -> str:

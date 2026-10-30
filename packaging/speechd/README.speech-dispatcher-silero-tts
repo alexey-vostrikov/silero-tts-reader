@@ -19,9 +19,48 @@ silero-tts-speechd (он в зависимостях).
     spd-say -O                        # ищем silero-tts в списке модулей
     spd-say -o silero-tts -l ru "Проверка синтеза"
     spd-say -o silero-tts -y MALE1 -l ru "Голос aidar"
+    spd-say -o silero-tts -l en "English voice"
 
-Голоса: FEMALE1 xenia, FEMALE2 baya, FEMALE3 kseniya, MALE1 aidar,
+Русские голоса: FEMALE1 xenia, FEMALE2 baya, FEMALE3 kseniya, MALE1 aidar,
 MALE2 eugene, MALE3 random.
+Английские голоса: FEMALE1 en_0, FEMALE2 en_2, FEMALE3 en_4, MALE1 en_1,
+MALE2 en_3, MALE3 en_117.
+
+Выбор голоса: -t female1 (тип) или -y xenia / -y en_0 (имя объявленного
+голоса). Необъявленное имя speech-dispatcher заменяет голосом по умолчанию.
+Без указаний клиента speech-dispatcher присылает тип MALE1: aidar для русского
+и en_1 для английского.
+
+Любой из 119 английских голосов модели доступен через CLI:
+
+    silero-tts-speak --lang en --voice en_42 "any voice"
+
+Чтобы он был доступен и клиентам speech-dispatcher, добавьте в
+/etc/speech-dispatcher/modules/silero-tts.conf строку AddVoice с нужным типом.
+
+Язык берётся из запроса клиента ($LANGUAGE), поэтому модуль один на все языки.
+
+Внутри одной фразы язык переключается по письменности: модуль вызывает
+silero-tts-speak с флагом --mixed, поэтому «synthesize использует пути движка»
+произносится английским голосом на латинице и русским на кириллице. Проверить:
+
+    spd-say -o silero-tts "synthesize использует пути движка"
+
+Английская модель в пакет не входит — её нужно скачать (55 МБ):
+
+    silero-tts-model download en
+    silero-tts-model list            # что уже установлено
+
+Без английской модели английский текст будет прочитан русскими фонемами.
+
+Скорость речи задаётся клиентом и работает для всех приложений:
+
+    spd-say -o silero-tts -r 50 "быстрее"      # -100…+100
+    spd-say -o silero-tts -r -30 "медленнее"
+
+Темп приходит в $RATE, CLI переводит его в множитель 0.5–2.0 и растягивает звук
+через rubberband-cli без изменения тона. Высота тона (-p) не поддерживается
+моделями Silero и в команду не передаётся.
 
 Модуль по умолчанию для всех клиентов: строка DefaultModule silero-tts в
 /etc/speech-dispatcher/speechd.conf.

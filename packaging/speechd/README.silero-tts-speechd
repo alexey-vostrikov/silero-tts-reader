@@ -7,12 +7,24 @@ Silero TTS из командной строки и управление моду
 
     silero-tts-speak "привет, мир"
     silero-tts-speak --voice aidar --rate 1.25 "другой голос и темп"
+    silero-tts-speak --lang en "hello, world"    # английская модель
+    silero-tts-speak --rate 1.5 "быстрее"        # скорость 0.5–3.0
     silero-tts-speak --wav-out /tmp/out.wav "только файл, без звука"
     echo "текст" | silero-tts-speak -
+    silero-tts-speak --list-voices               # голоса по языкам
 
-Нужны torch, sounddevice и модель Silero v5 (~/.local/share/silero-tts-reader/
-v5_ru.pt). Если чего-то нет, команда завершается кодом 1 и пишет в stderr, чего
-именно не хватает — это же сообщение попадает в лог speech-dispatcher.
+Язык выбирается так: --lang, затем tts.language в конфиге, а при auto — по
+письменности текста (кириллица → русская модель, латиница → английская).
+
+С флагом --mixed язык выбирается для каждого куска фразы отдельно: латинские
+слова читает английская модель, кириллицу — русская. Так «synthesize использует
+пути движка» звучит двумя голосами. Модуль speech-dispatcher вызывает CLI с
+этим флагом, поэтому смешанный текст работает у всех клиентов.
+
+    silero-tts-speak --mixed "synthesize использует пути движка"
+
+Смешанный режим по умолчанию для CLI включается ключом "mixed": true в секции
+tts конфига (~/.config/silero-tts-reader/config.json).
 
 2. silero-tts-speechd — управление модулем speech-dispatcher:
 
@@ -35,7 +47,26 @@ enable добавляет в /etc/speech-dispatcher/speechd.conf блок с м�
     spd-say -O                              # в списке должен быть silero-tts
     spd-say -o silero-tts -l ru "Проверка"
     spd-say -o silero-tts -y FEMALE2 -l ru "Голос baya"
+    spd-say -o silero-tts -l en "English voice"
 
 Сделать модуль основным: DefaultModule silero-tts в speechd.conf.
 
-Темп и высота тона не передаются: модель Silero v5 их не поддерживает.
+Модели. Нужны torch, sounddevice и файл модели нужного языка в
+~/.local/share/silero-tts-reader/. Модели качает silero-tts-model из пакета
+silero-tts-common:
+
+    silero-tts-model list
+    silero-tts-model download ru     # v5_ru.pt, 139 МБ
+    silero-tts-model download en     # v3_en.pt, 55 МБ
+
+Если чего-то нет, команда завершается кодом 1 и пишет в stderr, чего именно не
+хватает — это же сообщение попадает в лог speech-dispatcher.
+
+Скорость. Темп из speech-dispatcher приходит в флаге --spd-rate (шкала −100…+100)
+и переводится в множитель: 0 → 1.0, +100 → 2.0, −100 → 0.5. Звук растягивает
+rubberband-cli, поэтому тон голоса не меняется. Напрямую: --rate 0.5…3.0.
+Если rubberband-cli не установлен, команда говорит в обычном темпе и пишет
+предупреждение в stderr (речь важнее, чем отказ целиком).
+
+Высота тона не поддерживается: модели Silero не умеют её менять, поэтому $PITCH
+в команду не передаётся.

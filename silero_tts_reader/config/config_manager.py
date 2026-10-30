@@ -4,11 +4,17 @@ import os
 from pathlib import Path
 from typing import Any
 
+from ..models import DEFAULT_LANG, MODELS, model_path as default_model_path
+
 
 CONFIG_DIR = Path.home() / ".config" / "silero-tts-reader"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
-DEFAULT_MODEL_PATH = str(Path.home() / ".local" / "share" / "silero-tts-reader" / "v5_ru.pt")
+DEFAULT_MODEL_PATH = str(default_model_path(DEFAULT_LANG))
+
+# Языки, для которых конфиг хранит путь к модели и выбранный голос.
+DEFAULT_MODELS = {lang: str(default_model_path(lang)) for lang in MODELS}
+DEFAULT_SPEAKERS = {lang: MODELS[lang].default_speaker for lang in MODELS}
 
 DEFAULT_SYSTEM_PROMPT = (
     "Ты — генератор текста для синтеза речи (Silero TTS).\n"
@@ -29,8 +35,15 @@ DEFAULTS: dict[str, Any] = {
         "stop": "<ctrl>+<alt>+s",
     },
     "tts": {
+        # model_path/speaker оставлены ради старых конфигов: при чтении они
+        # переезжают в models/speakers (см. _migrate).
         "model_path": DEFAULT_MODEL_PATH,
-        "speaker": "xenia",
+        "speaker": MODELS[DEFAULT_LANG].default_speaker,
+        "models": dict(DEFAULT_MODELS),
+        "speakers": dict(DEFAULT_SPEAKERS),
+        "language": "auto",   # auto | ru | en | de | es | fr | ua
+        # переключать язык внутри фразы по письменности (латиница — en)
+        "mixed": False,
         "sample_rate": 48000,
     },
     "playback": {
@@ -73,9 +86,37 @@ class ConfigManager:
                 with CONFIG_FILE.open("r", encoding="utf-8") as f:
                     saved = json.load(f)
                 self._data = self._deep_merge(DEFAULTS, saved)
+                self._migrate(saved)
             except (json.JSONDecodeError, OSError):
                 # Corrupted config — use defaults
                 self._data = self._deep_merge(DEFAULTS, {})
+
+    def _migrate(self, saved: dict[str, Any]) -> None:
+        """Перенести одиночные model_path/speaker в многоязычные словари.
+
+        Без этого старая настройка «модель» молча игнорировалась бы: после
+        слияния с DEFAULTS в конфиге оказывались оба ключа, а код читает
+        models["ru"], тогда как пользователь правил model_path.
+        """
+        tts = saved.get("tts")
+        if not isinstance(tts, dict):
+            return
+
+        merged_tts = dict(self._data.get("tts") or {})
+        raw_models, raw_speakers = tts.get("models"), tts.get("speakers")
+        saved_models: dict[str, Any] = raw_models if isinstance(raw_models, dict) else {}
+        saved_speakers: dict[str, Any] = raw_speakers if isinstance(raw_speakers, dict) else {}
+
+        # models.ru из DEFAULTS уже заполнен, поэтому setdefault бесполезен:
+        # старую настройку переносим принудительно, но только если новый ключ
+        # в конфиге не задан.
+        if tts.get("model_path") and DEFAULT_LANG not in saved_models:
+            merged_tts["models"] = {**(merged_tts.get("models") or {}),
+                                    DEFAULT_LANG: tts["model_path"]}
+        if tts.get("speaker") and DEFAULT_LANG not in saved_speakers:
+            merged_tts["speakers"] = {**(merged_tts.get("speakers") or {}),
+                                      DEFAULT_LANG: tts["speaker"]}
+        self._data["tts"] = merged_tts
 
     def save(self) -> None:
         """Persist current config to disk."""
@@ -134,20 +175,69 @@ class ConfigManager:
         self.set("hotkeys", "stop", v)
 
     @property
+    def models(self) -> dict[str, str]:
+        """Пути к моделям по языкам."""
+        configured = self.get("tts", "models", default={})
+        result = dict(DEFAULT_MODELS)
+        if isinstance(configured, dict):
+            result.update({str(k): str(v) for k, v in configured.items() if v})
+        return result
+
+    def model_for(self, language: str) -> str:
+        return self.models.get(language, str(default_model_path(language))
+                              if language in MODELS else DEFAULT_MODEL_PATH)
+
+    @property
+    def speakers(self) -> dict[str, str]:
+        """Выбранный голос по языкам."""
+        configured = self.get("tts", "speakers", default={})
+        result = dict(DEFAULT_SPEAKERS)
+        if isinstance(configured, dict):
+            result.update({str(k): str(v) for k, v in configured.items() if v})
+        return result
+
+    def speaker_for(self, language: str) -> str:
+        return self.speakers.get(
+            language,
+            MODELS[language].default_speaker if language in MODELS else MODELS[DEFAULT_LANG].default_speaker,
+        )
+
+    @property
+    def language(self) -> str:
+        """Язык синтеза: auto (по тексту) или конкретный код."""
+        return str(self.get("tts", "language", default="auto"))
+
+    @language.setter
+    def language(self, v: str) -> None:
+        self.set("tts", "language", str(v))
+
+    @property
+    def mixed(self) -> bool:
+        """Переключать ли язык внутри одной фразы по письменности."""
+        return bool(self.get("tts", "mixed", default=False))
+
+    @mixed.setter
+    def mixed(self, v: bool) -> None:
+        self.set("tts", "mixed", bool(v))
+
+    @property
     def model_path(self) -> str:
-        return self.get("tts", "model_path", default=DEFAULT_MODEL_PATH)
+        """Путь к русской модели — совместимость со старыми конфигами."""
+        return self.model_for(DEFAULT_LANG)
 
     @model_path.setter
     def model_path(self, v: str) -> None:
-        self.set("tts", "model_path", v)
+        self.set("tts", "models", {**self.models, DEFAULT_LANG: str(v)})
+        self.set("tts", "model_path", str(v))
 
     @property
     def speaker(self) -> str:
-        return self.get("tts", "speaker", default="xenia")
+        return self.speaker_for(DEFAULT_LANG)
 
     @speaker.setter
     def speaker(self, v: str) -> None:
-        self.set("tts", "speaker", v)
+        self.set("tts", "speakers", {**self.speakers, DEFAULT_LANG: str(v)})
+        self.set("tts", "speaker", str(v))
 
     @property
     def sample_rate(self) -> int:
