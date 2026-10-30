@@ -82,17 +82,41 @@ def test_protocol_constants() -> None:
           "режим клавиатуры on-demand = 2")
 
 
+def test_display_states() -> None:
+    """Три состояния дисплея: Wayland, X11, нет дисплея.
+
+    Проверка важна не сама по себе: на X11 и без дисплея нельзя звать
+    библиотеку протокола — она вызывает gtk_init и печатает предупреждение
+    в журнал, что в серверном запуске выглядит как ошибка приложения.
+    """
+    print("\n2. Состояние дисплея")
+    saved = layer_shell._is_wayland_display
+    try:
+        layer_shell._is_wayland_display = lambda: False
+        check(layer_shell.available() is False, "X11: протокола нет")
+        check("не Wayland" in layer_shell.reason(), f"причина: {layer_shell.reason()}")
+
+        layer_shell._is_wayland_display = lambda: None
+        check(layer_shell.available() is False, "нет дисплея: протокола нет")
+        check("нет дисплея" in layer_shell.reason(), f"причина: {layer_shell.reason()}")
+    finally:
+        layer_shell._is_wayland_display = saved
+
+
 def test_missing_library() -> None:
     """Нет библиотеки — нет и протокола, но приложение работает дальше."""
     print("\n2. Библиотека протокола отсутствует")
     saved_loaded, saved_lib = layer_shell._loaded, layer_shell._lib
+    saved_display = layer_shell._is_wayland_display
     layer_shell._loaded, layer_shell._lib = True, None
+    layer_shell._is_wayland_display = lambda: True   # дисплей — параметром
     try:
         check(layer_shell.available() is False, "available() возвращает False")
         check("libgtk4-layer-shell" in layer_shell.reason(),
               f"reason() называет причину: {layer_shell.reason()}")
     finally:
         layer_shell._loaded, layer_shell._lib = saved_loaded, saved_lib
+        layer_shell._is_wayland_display = saved_display
 
 
 def test_unsupported_compositor() -> None:
@@ -104,13 +128,16 @@ def test_unsupported_compositor() -> None:
             return 0
 
     saved_loaded, saved_lib = layer_shell._loaded, layer_shell._lib
+    saved_display = layer_shell._is_wayland_display
     layer_shell._loaded, layer_shell._lib = True, FakeLib()
+    layer_shell._is_wayland_display = lambda: True
     try:
         check(layer_shell.available() is False, "available() = False")
         check("не реализует" in layer_shell.reason(),
               f"причина: {layer_shell.reason()}")
     finally:
         layer_shell._loaded, layer_shell._lib = saved_loaded, saved_lib
+        layer_shell._is_wayland_display = saved_display
 
 
 def test_monitor_by_index() -> None:
@@ -138,6 +165,7 @@ def test_monitor_by_index() -> None:
 def main() -> int:
     print("Позиционирование через layer-shell")
     test_protocol_constants()
+    test_display_states()
     test_missing_library()
     test_unsupported_compositor()
     test_monitor_by_index()
