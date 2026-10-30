@@ -2,12 +2,13 @@
 Name=Silero TTS Reader
 GenericName=Text to Speech Reader
 Comment=Read selected text aloud using Silero TTS
-Exec=silero-tts-reader
+Exec=silero-tts-reader %f
 Icon=audio-headset
 Terminal=false
 Type=Application
 Categories=Accessibility;Utility;
-Keywords=tts;text;speech;silero;read;
+MimeType=text/plain;application/x-fictionbook+xml;application/x-zip-compressed-fb2;
+Keywords=tts;text;speech;silero;read;book;fb2;
 StartupNotify=false
 StartupWMClass=silero-tts-reader
 X-GNOME-Autostart-enabled=true

@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import subprocess
 import time
+from pathlib import Path
 from typing import Optional
+
+from ..i18n import _
+from . import fb2
 
 
 class TextExtractor:
@@ -82,6 +86,50 @@ class TextExtractor:
             pass
 
         return None
+
+    # Расширения, которые имеет смысл читать вслух. Остальное не открываем:
+    # случайный бинарник в синтезаторе — это поток мусора в динамике.
+    TEXT_SUFFIXES = (".txt", ".md", ".markdown", ".rst", ".log", ".csv", ".json", ".xml")
+    # Книги разбираются отдельно: это XML внутри архива, а не просто текст
+    BOOK_SUFFIXES = (
+        ".fb2", ".fb2.zip", ".fb2.xz", ".fb2.lzma", ".fb2.gz", ".fb2.bz2",
+        ".fb2.zst", ".fb2.lz4", ".fb2.tar", ".fb2.tar.gz", ".fb2.tgz",
+        ".fb2.tar.xz", ".fb2.txz", ".fb2.tar.bz2", ".fb2.tbz2",
+        ".fb2.tar.zst", ".fb2.tzst",
+    )
+
+    @classmethod
+    def read_text_file(cls, path: str) -> str:
+        """Прочитать файл для озвучки: текст или книгу FB2.
+
+        Текст: кодировку не угадываем вслепую — сначала UTF-8 (обычный случай),
+        затем cp1251, так открываются старые русские файлы из Windows.
+        Книга: контейнер (zip/xz/lzma/gzip/bzip2/zstd/lz4/tar) определяется по
+        содержимому, поэтому переименованный файл тоже читается. Пустой файл и
+        неподдерживаемое расширение — понятная ошибка, а не тишина.
+        """
+        file_path = Path(path).expanduser()
+        if not file_path.is_file():
+            raise FileNotFoundError(_("файл не найден: {path}").format(path=file_path))
+
+        if fb2.is_fb2(file_path):
+            return fb2.read(file_path)
+
+        if file_path.suffix.lower() not in cls.TEXT_SUFFIXES:
+            raise ValueError(
+                _("не текстовый файл: {name} (поддерживаются: {suffixes})").format(
+                    name=file_path.name,
+                    suffixes=", ".join(cls.TEXT_SUFFIXES + cls.BOOK_SUFFIXES),
+                )
+            )
+
+        raw = file_path.read_bytes()
+        for encoding in ("utf-8", "cp1251"):
+            try:
+                return raw.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+        return raw.decode("utf-8", errors="replace")
 
     def _set_clipboard_text(self, text: str) -> None:
         """Write text to clipboard (Wayland + X11)."""
