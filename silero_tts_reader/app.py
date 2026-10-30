@@ -361,11 +361,15 @@ class Application(Gtk.Application):
         use_speed = speed if speed is not None else self._config.speed
         use_speaker = speaker if speaker is not None else self._config.speakers
 
+        # Общее число квантов известно заранее: по нему полоска показывает место
+        # в книге, а не долю текущего предложения.
+        total_quanta = TTSWorker.count_quanta(text)
         self._player = AudioPlayer(
             audio_queue=self._audio_queue,
             stop_event=self._stop_event,
             sample_rate=self._config.sample_rate,
             speed=use_speed,
+            total_segments=total_quanta,
             on_started=lambda: self._ui(self._on_playback_started),
             on_segment_progress=lambda v: self._ui(self._on_segment_progress, v),
             on_paused=lambda: self._ui(self._widget.set_paused, True) if self._widget else None,
@@ -387,13 +391,19 @@ class Application(Gtk.Application):
             on_error=lambda e: self._ui(self._show_tts_error, e),
         )
 
+        # Окно сразу: первый квант синтезируется секунду-две, и всё это время
+        # человек должен видеть, что приложение работает и что читается.
+        if self._widget is not None:
+            self._widget.fade_in()
+
         self._worker.start()
         self._player.start()
 
     def _on_playback_started(self) -> None:
         if self._widget is None:
             return
-        self._widget.fade_in()
+        # Окно уже показано в _begin_pipeline: повторный fade_in переставлял
+        # его и печатал «Окно показано» дважды.
         self._widget.set_paused(False)
 
     def _on_segment_progress(self, value: float) -> None:

@@ -143,7 +143,8 @@ w.on_rewind = lambda s: calls.append(("rewind", s))
 w.on_seek_fraction = lambda f: calls.append(("seek", round(f, 2)))
 
 check("окно создано, недекорировано", w.get_decorated() is False)
-check("тип окна — утилита (не в списке задач)", w.get_type_hint() == Gdk.WindowTypeHint.UTILITY, str(w.get_type_hint()))
+check("окно обычное: видно в панели задач", w.get_skip_taskbar_hint() is False,
+      str(w.get_skip_taskbar_hint()))
 
 w.apply_theme(is_dark=True, accent_color="#6366f1")
 w.set_progress(0.42)
@@ -152,8 +153,14 @@ w.set_paused(True)
 check("пауза меняет подпись кнопки", w._btn_pause.get_label() == "▶", w._btn_pause.get_label())
 w.set_paused(False)
 w.set_speed(1.75)
-check("set_speed выставляет шкалу", abs(w._speed_slider.get_value() - 1.75) < 1e-6, str(w._speed_slider.get_value()))
-check("set_speed обновляет подпись", w._speed_value.get_text() == "1.8×", w._speed_value.get_text())
+check("set_speed выбирает значение в списке", w._speed_combo.get_active_id() == "1.75",
+      str(w._speed_combo.get_active_id()))
+check("скорость — выпадающий список, а не шкала", isinstance(w._speed_combo, Gtk.ComboBoxText),
+      type(w._speed_combo).__name__)
+check("по умолчанию выбрано 1×", w._speed_combo.get_active_id() is not None, "")
+# У ComboBoxText в модели две колонки: подпись и id значения
+ids = {w._speed_combo.get_model()[i][1] for i in range(len(w._speed_combo.get_model()))}
+check("в списке есть 0.5× и 3×", {"0.5", "3.0"}.issubset(ids), str(sorted(ids)))
 
 w._btn_pause.clicked()
 w._btn_stop.clicked()

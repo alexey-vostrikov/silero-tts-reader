@@ -107,7 +107,7 @@ def test_catalog() -> None:
         "Не удалось синтезировать речь": "Could not synthesise speech",
         "Отмена": "Cancel",
         "Сохранить": "Save",
-        "Скорость:": "Speed:",
+        "Скорость воспроизведения": "Playback speed",
         "🔊 Воспроизведение": "🔊 Playback",
         "📋  Озвучить буфер обмена": "📋  Speak the clipboard",
         "✖  Выход": "✖  Quit",
