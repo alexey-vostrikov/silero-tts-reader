@@ -234,11 +234,13 @@ jobs:
           # Зависимости трея и управления скоростью должны быть рабочими.
           # Значок отдаётся по D-Bus (StatusNotifierItem), поэтому проверяем
           # модуль значка и запасной путь для X11, а не привязку AppIndicator.
-          python3 - <<'PY'
+          # PYTHONPATH обязателен: пакет лежит в /usr/lib/silero-tts, и без него
+          # импорт ищет модули в текущем каталоге и падает.
+          PYTHONPATH=/usr/lib/silero-tts python3 - <<'PY'
           import gi
           gi.require_version("Gio", "2.0")
           from gi.repository import Gio  # noqa: F401
-          from silero_tts_reader.ui import layer_shell, sni_tray  # noqa: F401
+          from silero_tts_reader.ui import layer_shell, sni_tray
           print("  ✓ значок трея: StatusNotifierItem по D-Bus")
           print(f"  ✓ layer-shell: {layer_shell.reason()}")
           PY

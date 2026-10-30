@@ -560,6 +560,7 @@ class PlaybackWidget(Gtk.ApplicationWindow):
             self._place_window()
         # Один раз в журнал: видно ли окно на самом деле. Без этой строки
         # «окно не появилось» приходится угадывать.
+        # i18n: нет перевода — строка журнала в консоли
         print(
             f"  Окно показано: {self.get_width()}×{self.get_height()}"
             f", позиция {self._position_mode}, видимо {self.get_visible()}",

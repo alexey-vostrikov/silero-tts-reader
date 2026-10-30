@@ -115,8 +115,31 @@ def _load():
     return lib
 
 
+def _is_wayland_display() -> bool | None:
+    """Работаем ли под Wayland. None — дисплея ещё нет (например, в тестах).
+
+    Проверка нужна до вызова библиотеки: на X11 она вызывает
+    ``assert GDK_IS_WAYLAND_DISPLAY`` и печатает CRITICAL в журнал, хотя
+    ответ всё равно «нет».
+    """
+    try:
+        display = Gdk.Display.get_default()
+    except Exception:
+        return None
+    if display is None:
+        return None
+    return type(display).__name__.startswith("GdkWayland")
+
+
 def available() -> bool:
-    """Протокол поддерживается этим композитором?"""
+    """Протокол поддерживается этим композитором?
+
+    Требуется именно Wayland: на X11 протокола нет вовсе, а без дисплея
+    (сервер, тесты) спрашивать библиотеку бессмысленно — она вызывает
+    ``gtk_init`` и печатает в журнал предупреждение о дисплее.
+    """
+    if _is_wayland_display() is not True:
+        return False
     lib = _load()
     if lib is None:
         return False
@@ -128,6 +151,11 @@ def available() -> bool:
 
 def reason() -> str:
     """Почему недоступно — для журнала, чтобы не гадать."""
+    display = _is_wayland_display()
+    if display is False:
+        return "сессия не Wayland: место окна задаёт X-сервер"
+    if display is None:
+        return "нет дисплея: протокол недоступен (серверный запуск или тесты)"
     lib = _load()
     if lib is None:
         return "нет библиотеки libgtk4-layer-shell"
@@ -136,6 +164,7 @@ def reason() -> str:
             return "поддерживается"
         return "композитор не реализует wlr-layer-shell"
     except Exception as exc:
+        # i18n: нет перевода — диагностика в журнале запуска
         return f"ошибка проверки: {exc}"
 
 

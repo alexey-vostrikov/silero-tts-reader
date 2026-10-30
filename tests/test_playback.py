@@ -74,6 +74,7 @@ def make_player(queue_, stop, **kwargs) -> AudioPlayer:
         speed=1.0,
         on_segment_progress=kwargs.pop("on_progress", None),
         total_segments=kwargs.pop("total_segments", 0),
+        on_error=kwargs.pop("on_error", None),
     )
 
 
@@ -89,13 +90,45 @@ def test_single_stream() -> None:
     for _ in range(4):
         q.put(tone)
         time.sleep(0.05)
-    q.put(type("Done", (), {})())   # не метка: проверим остановкой
+    # Никакого «мусорного» объекта в очередь: проверка про один поток, а не
+    # про устойчивость к неожиданным значениям. Раньше сюда клали пустышку
+    # «Done», плеер пытался её проиграть и печатал TypeError — то есть набор
+    # был зелёным, а в журнале лежала ошибка воспроизведения.
     time.sleep(0.5)
     stop.set()
     player.join(timeout=5)
 
     check(FakeStream.opened == 1, f"устройство открыто один раз, а не на каждый квант: {FakeStream.opened}")
     check(not player.is_alive(), "плеер завершился по stop_event")
+
+
+def test_unexpected_item() -> None:
+    """Посторонний объект в очереди не роняет поток и уходит в on_error.
+
+    Отдельная проверка вместо пустышки в предыдущем тесте: важно не то, что
+    поток выжил случайно, а что ошибка названа и плеер продолжает работать.
+    """
+    print("\n2. Посторонний объект в очереди")
+    install_stub()
+    q: queue.Queue = queue.Queue()
+    stop = threading.Event()
+    errors: list[str] = []
+    player = make_player(q, stop, on_error=errors.append)
+    player.start()
+
+    q.put(np.zeros(4800, dtype=np.float32))
+    time.sleep(0.2)
+    q.put(object())          # не звук и не метка конца
+    time.sleep(0.3)
+    q.put(np.zeros(4800, dtype=np.float32))   # после ошибки плеер обязан жить
+    time.sleep(0.4)
+    stop.set()
+    player.join(timeout=5)
+
+    check(len(errors) == 1, f"ошибка названа один раз: {errors}")
+    check("has no len" in errors[0] or "len()" in errors[0],
+          f"сообщение объясняет причину: {errors[0]}")
+    check(not player.is_alive(), "плеер завершился по stop_event, а не упал")
 
 
 def test_gap_between_quanta() -> None:
@@ -202,6 +235,7 @@ def test_speed_control_disabled() -> None:
 def main() -> int:
     print("Проигрывание: поток, пауза, прогресс")
     test_single_stream()
+    test_unexpected_item()
     test_gap_between_quanta()
     test_overall_progress()
     test_speed_control_disabled()

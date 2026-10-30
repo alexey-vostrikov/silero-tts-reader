@@ -64,13 +64,28 @@ def test_packaging_name() -> None:
 
 
 def test_icon_file() -> None:
-    """Файл иконки находится и существует."""
+    """Файл иконки находится и существует.
+
+    Имя файла обязано совпадать с именем иконки только для УСТАНОВЛЕННОЙ
+    иконки: тему GTK ищет по имени, и опечатка в имени означает «шестерёнку».
+    Исходник в дереве (`assets/icon.png`) называется иначе — это не контракт с
+    темой, а входной файл для `packaging/make-icons.py`, и требовать от него
+    совпадения значит проверять не то. Проверка зависит от окружения: на
+    машине с установленным пакетом берётся системный файл, в CI — исходник.
+    """
     print("\n3. Файл иконки")
     path = window_icon.icon_file()
     check(bool(path), f"путь найден: {path}")
     check(Path(path).is_file(), "файл существует")
-    check(Path(path).name == f"{window_icon.ICON_NAME}.png",
-          f"имя файла совпадает с именем иконки: {Path(path).name}")
+
+    installed = Path(path).parent.parent.parent == Path("/usr/share")
+    if installed:
+        check(Path(path).name == f"{window_icon.ICON_NAME}.png",
+              f"имя установленной иконки совпадает с именем в теме: {Path(path).name}")
+    else:
+        print(f"  — имя файла не проверяется: это исходник из дерева, "
+              f"а не установленная иконка ({Path(path).name})")
+        check(Path(path).suffix == ".png", "исходник в формате PNG")
 
 
 def test_apply_icon() -> None:
