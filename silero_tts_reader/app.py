@@ -40,7 +40,8 @@ from .ui.playback_widget import PlaybackWidget  # noqa: E402
 from .ui.settings_window import SettingsWindow  # noqa: E402
 from .ui.sni_tray import MenuEntry, StatusNotifierTray  # noqa: E402
 from .ui.theme_manager import ThemeManager  # noqa: E402
-from .ui.window_icon import ICON_NAME, icon_file  # noqa: E402
+from .ui.tray_icons import icon_name as tray_icon_name  # noqa: E402
+from .ui.window_icon import icon_file  # noqa: E402
 
 # Идентификатор приложения задан в ui/window_icon.py: он же используется как
 # имя .desktop-файла и WM_CLASS, иначе рабочий стол не находит иконку.
@@ -129,8 +130,10 @@ class Application(Gtk.Application):
 
         # Значок в лотке — через StatusNotifierItem: в GTK4 Gtk.StatusIcon и
         # Gtk.Menu удалены, а привязка AppIndicator собрана под GTK3.
+        # Значок трея — отдельный монохромный рисунок: цветная иконка приложения
+        # на тёмной панели выглядит ярким пятном, на светлой — тёмным.
         self._tray = StatusNotifierTray(
-            icon_name=ICON_NAME,
+            icon_name=tray_icon_name("idle", self._config.tray_icon),
             title=APP_NAME,
             on_activate=self._show_window,
         )
@@ -474,8 +477,8 @@ class Application(Gtk.Application):
             total_segments=total_quanta,
             on_started=lambda: self._ui(self._on_playback_started),
             on_segment_progress=lambda v: self._ui(self._on_segment_progress, v),
-            on_paused=lambda: self._ui(self._widget.set_paused, True) if self._widget else None,
-            on_resumed=lambda: self._ui(self._widget.set_paused, False) if self._widget else None,
+            on_paused=lambda: self._ui(self._on_playback_paused),
+            on_resumed=lambda: self._ui(self._on_playback_resumed),
             on_finished=lambda: self._ui(self._on_playback_finished),
             on_stopped=lambda: self._ui(self._on_playback_stopped),
             on_speed_unavailable=lambda: self._ui(
@@ -501,7 +504,14 @@ class Application(Gtk.Application):
         self._worker.start()
         self._player.start()
 
+    def _set_tray_state(self, state: str) -> None:
+        """Показать состояние воспроизведения значком трея."""
+        if self._tray is None:
+            return
+        self._tray.set_icon_name(tray_icon_name(state, self._config.tray_icon))
+
     def _on_playback_started(self) -> None:
+        self._set_tray_state("playing")
         if self._widget is None:
             return
         # Окно уже показано в _begin_pipeline: повторный fade_in переставлял
@@ -513,11 +523,13 @@ class Application(Gtk.Application):
             self._widget.set_progress(value)
 
     def _on_playback_finished(self) -> None:
+        self._set_tray_state("idle")
         if self._widget is not None:
             self._widget.set_paused(False)
             self._widget.schedule_hide(2000)
 
     def _on_playback_stopped(self) -> None:
+        self._set_tray_state("idle")
         if self._widget is not None:
             self._widget.schedule_hide(500)
 
@@ -528,6 +540,16 @@ class Application(Gtk.Application):
         self._stop_event.set()
         if self._player and self._player.is_alive():
             self._player.join(timeout=1.0)
+
+    def _on_playback_paused(self) -> None:
+        self._set_tray_state("paused")
+        if self._widget is not None:
+            self._widget.set_paused(True)
+
+    def _on_playback_resumed(self) -> None:
+        self._set_tray_state("playing")
+        if self._widget is not None:
+            self._widget.set_paused(False)
 
     def _toggle_pause(self) -> None:
         if self._player is None:
@@ -599,6 +621,8 @@ class Application(Gtk.Application):
             self._theme_manager.set_mode(self._config.theme)
         self._update_widget_theme()
         self._register_hotkeys()
+        # Значок трея мог сменить вариант цвета: переставляем без перезапуска.
+        self._set_tray_state("idle")
         if self._widget is not None:
             self._widget.set_speed(self._config.speed)
 

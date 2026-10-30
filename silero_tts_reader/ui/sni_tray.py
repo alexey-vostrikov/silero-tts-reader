@@ -80,6 +80,21 @@ class StatusNotifierTray:
         if self._bus is not None:
             self._emit_layout()
 
+    def set_icon_name(self, name: str) -> None:
+        """Сменить значок и сообщить об этом панели.
+
+        Панель кэширует картинку и сама свойство не перечитывает: без сигнала
+        ``NewIconName`` значок остаётся прежним до перезапуска приложения.
+        Меняется значок по состоянию воспроизведения и при смене варианта
+        цвета штриха.
+        """
+        if not name or name == self._icon_name:
+            return
+        self._icon_name = name
+        if self._bus is not None:
+            for signal in ("NewIconName", "NewIcon"):
+                self._bus.emit_signal(None, ITEM_PATH, ITEM_IFACE, signal, None)
+
     def _flatten(self) -> None:
         """Разложить дерево в плоский список: dbusmenu спрашивает по id."""
         self._flat: dict[int, MenuEntry] = {}

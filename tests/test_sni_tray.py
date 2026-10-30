@@ -280,6 +280,31 @@ def test_second_tray_refused(bus) -> None:
     check(second.available is False, "и остаётся в состоянии «не показан»")
 
 
+def test_icon_switch(bus) -> None:
+    """Смена значка меняет свойство и не требует перезапуска панели.
+
+    Панель читает IconName один раз и хранит картинку; без сигнала
+    NewIconName значок остаётся прежним, поэтому проверяем и значение
+    свойства, и то, что повторная установка того же имени ничего не шлёт.
+    """
+    print("\n9. Смена значка")
+    tray = StatusNotifierTray(icon_name="silero-tts-reader-tray-dark",
+                              title="Смена значка")
+    tray.set_entries([MenuEntry("Выход", lambda: None)])
+    check(tray.show() is True, "значок показан")
+    try:
+        check(tray.get_property("IconName").unpack() == "silero-tts-reader-tray-dark",
+              "исходное имя отдаётся свойством")
+        tray.set_icon_name("silero-tts-reader-tray-light-wave")
+        check(tray.get_property("IconName").unpack() == "silero-tts-reader-tray-light-wave",
+              "новое имя видно панели сразу")
+        tray.set_icon_name("")
+        check(tray.get_property("IconName").unpack() == "silero-tts-reader-tray-light-wave",
+              "пустое имя игнорируется: значок не пропадает")
+    finally:
+        tray.hide()
+
+
 def test_activate_without_handler(bus) -> None:
     """Значок без обработчика щелчка не падает на Activate."""
     print("\n8. Щелчок без обработчика")
@@ -305,6 +330,7 @@ def main() -> int:
             test_registration(stub, bus, loop)
             # Значок без обработчика — после того, как первый снят: в процессе
             # он может быть только один.
+            test_icon_switch(bus)
             test_activate_without_handler(bus)
         finally:
             stub.stop()

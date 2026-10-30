@@ -746,6 +746,26 @@ class SettingsWindow(Gtk.Dialog):
         grid.attach(self._label(_("Язык интерфейса:")), 0, 1, 1, 1)
         grid.attach(self._language_combo, 1, 1, 1, 1)
 
+        # Значок трея: цвет штриха не выводится из темы приложения — панель
+        # часто живёт по своей теме, и значка приложения в ней не видно.
+        self._tray_icon_combo = Gtk.ComboBoxText()
+        for label, value in (
+            (_("Авто (по системной теме)"), "auto"),
+            (_("Светлый штрих (для тёмной панели)"), "light"),
+            (_("Тёмный штрих (для светлой панели)"), "dark"),
+        ):
+            self._tray_icon_combo.append(value, label)
+
+        current_tray = self._pending.get("tray_icon", self._config.tray_icon)
+        if not self._tray_icon_combo.set_active_id(current_tray):
+            self._tray_icon_combo.set_active_id("auto")
+        self._tray_icon_combo.connect(
+            "changed", lambda w: self._pending.update({"tray_icon": w.get_active_id()})
+            if w.get_active_id() else None
+        )
+        grid.attach(self._label(_("Значок в трее:")), 0, 3, 1, 1)
+        grid.attach(self._tray_icon_combo, 1, 3, 1, 1)
+
         self._accent_chk = Gtk.CheckButton(label=_("Использовать системный акцентный цвет"))
         use_sys_acc = self._pending.get("use_system_accent", self._config.use_system_accent)
         self._accent_chk.set_active(bool(use_sys_acc))
