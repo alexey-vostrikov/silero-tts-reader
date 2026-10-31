@@ -69,6 +69,11 @@ DEFAULTS: dict[str, Any] = {
         "use_system_accent": True,
         # значок в трее: auto — по системной теме, иначе светлый или тёмный штрих
         "tray_icon": "auto",
+        # глобальное позиционирование окна плеера: off (по умолчанию), auto,
+        # layer (протокол layer-shell) или shell (расширение Window Calls)
+        "window_positioning": "off",
+        # подробность журнала в консоли: quiet, normal, detail, debug
+        "log_level": "normal",
         # язык интерфейса: auto — из окружения (LANG/LC_ALL), иначе ru_RU/en_US
         "language": "auto",
     },
@@ -354,6 +359,33 @@ class ConfigManager:
     def tray_icon(self, v: str) -> None:
         if v in ("auto", "light", "dark"):
             self.set("ui", "tray_icon", v)
+
+    @property
+    def window_positioning(self) -> str:
+        """Глобальное позиционирование окна плеера.
+
+        ``off`` — место выбирает композитор (по умолчанию); ``auto`` — что
+        доступно в системе; ``layer`` — только протокол layer-shell;
+        ``shell`` — только расширение оболочки Window Calls.
+        """
+        value = self.get("ui", "window_positioning", default="off")
+        return value if value in ("off", "auto", "layer", "shell") else "off"
+
+    @window_positioning.setter
+    def window_positioning(self, v: str) -> None:
+        if v in ("off", "auto", "layer", "shell"):
+            self.set("ui", "window_positioning", v)
+
+    @property
+    def log_level(self) -> str:
+        """Подробность журнала: quiet, normal, detail или debug."""
+        value = self.get("ui", "log_level", default="normal")
+        return value if value in ("quiet", "normal", "detail", "debug") else "normal"
+
+    @log_level.setter
+    def log_level(self, v: str) -> None:
+        if v in ("quiet", "normal", "detail", "debug"):
+            self.set("ui", "log_level", v)
 
     @property
     def ui_language(self) -> str:

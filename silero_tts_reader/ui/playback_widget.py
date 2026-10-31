@@ -26,6 +26,7 @@ from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 from ..core.audio_player import SPEED_AVAILABLE  # noqa: E402
 from ..i18n import _  # noqa: E402
 from . import layer_shell, window_placement  # noqa: E402
+from .css_scope import scope_css  # noqa: E402
 from .window_icon import apply_icon  # noqa: E402
 
 WIDGET_WIDTH = 360
@@ -39,8 +40,6 @@ APP_TITLE = "Silero TTS Reader"
 # у перемотки. Эти символы есть в Noto и рисуются в том же масштабе.
 # Папка из Noto Emoji: такой глиф узнаётся сразу и не требует подписи.
 OPEN_GLYPH = "📂"
-PAUSE_GLYPH = "▌▌"
-PLAY_GLYPH = "▶"
 STOP_GLYPH = "■"
 
 # Выбор скорости: шаг 0,1× — этого достаточно, а список остаётся коротким.
@@ -142,10 +141,104 @@ class ProgressBar(Gtk.DrawingArea):
             self._on_seek(fraction)
 
 
+class PauseGlyph(Gtk.DrawingArea):
+    """Знак паузы и продолжения: два бруска или треугольник.
+
+    Раньше кнопка показывала текст ``▌▌``. Печатный знак занимает половину
+    своей клетки, поэтому при центрировании по ширине строки сам рисунок
+    уезжал влево, и на кнопке он выглядел сдвинутым. Здесь знак рисуется по
+    фактическому размеру области, так что центрирование получается из
+    геометрии, а не из метрик шрифта.
+    """
+
+    def __init__(self, state: str = "pause") -> None:
+        super().__init__()
+        self._state = state
+        self._colour = "#ffffff"
+        self.set_draw_func(self._draw)
+
+    def set_state(self, state: str) -> None:
+        """``pause`` — два бруска, ``play`` — треугольник."""
+        if state == self._state:
+            return
+        self._state = state
+        self.queue_draw()
+
+    def set_colour(self, colour: str) -> None:
+        self._colour = colour
+        self.queue_draw()
+
+    def bars(self, width: int, height: int) -> list[tuple[float, float, float, float]]:
+        """Прямоугольники знака паузы: (x, y, ширина, высота).
+
+        Геометрия вынесена из рисования, чтобы центровку можно было проверить
+        без графической библиотеки: в образе сборки нет python3-cairo.
+        """
+        side = min(width, height) * 0.55
+        cx, cy = width / 2, height / 2
+        bar = side * 0.30
+        gap = side * 0.22
+        top = cy - side / 2
+        return [
+            (cx + index * (gap / 2 + bar / 2) - bar / 2, top, bar, side)
+            for index in (-1, 1)
+        ]
+
+    def triangle(self, width: int, height: int) -> list[tuple[float, float]]:
+        """Вершины треугольника «продолжить», оптически по центру.
+
+        Сдвиг на 4 % влево: справа у знака пусто, а слева — сплошная кромка.
+        """
+        side = min(width, height) * 0.55
+        cx, cy = width / 2, height / 2
+        return [
+            (cx - side * 0.46, cy - side / 2),
+            (cx + side * 0.46, cy),
+            (cx - side * 0.46, cy + side / 2),
+        ]
+
+    def _draw(self, _area, cr, width: int, height: int) -> None:
+        cr.set_source_rgba(*self._rgba(self._colour))
+
+        if self._state == "pause":
+            for x, y, bar_width, bar_height in self.bars(width, height):
+                self._rounded_rect(cr, x, y, bar_width, bar_height, bar_width * 0.28)
+                cr.fill()
+            return
+
+        points = self.triangle(width, height)
+        cr.move_to(*points[0])
+        for point in points[1:]:
+            cr.line_to(*point)
+        cr.close_path()
+        cr.fill()
+
+    @staticmethod
+    def _rounded_rect(cr, x: float, y: float, width: float, height: float,
+                      radius: float) -> None:
+        cr.new_sub_path()
+        cr.arc(x + width - radius, y + radius, radius, -1.5708, 0)
+        cr.arc(x + width - radius, y + height - radius, radius, 0, 1.5708)
+        cr.arc(x + radius, y + height - radius, radius, 1.5708, 3.1416)
+        cr.arc(x + radius, y + radius, radius, 3.1416, 4.7124)
+        cr.close_path()
+
+    @staticmethod
+    def _rgba(colour: str) -> tuple[float, float, float, float]:
+        value = colour.lstrip("#")
+        if len(value) == 3:
+            value = "".join(ch * 2 for ch in value)
+        red = int(value[0:2], 16) / 255
+        green = int(value[2:4], 16) / 255
+        blue = int(value[4:6], 16) / 255
+        return red, green, blue, 1.0
+
+
 class PlaybackWidget(Gtk.ApplicationWindow):
     """Полупрозрачный виджет управления воспроизведением поверх других окон."""
 
-    def __init__(self, application=None, monitor_index: int | None = None) -> None:
+    def __init__(self, application=None, monitor_index: int | None = None,
+                 positioning: str = "off") -> None:
         super().__init__(application=application)
 
         # Callbacks, которые проставляет приложение
@@ -161,9 +254,13 @@ class PlaybackWidget(Gtk.ApplicationWindow):
         self._is_paused = False
         self._fade_source: int | None = None
         self._hide_timer: int | None = None
-        # Как окно поставлено: "layer" (протокол), "x11" (запрос к серверу)
-        # или "none" (место выбрал композитор). Для последнего наш move() не
-        # действует вовсе.
+        # Глобальное позиционирование выключено по умолчанию: место окна
+        # выбирает композитор, как для любого приложения. Включается в
+        # настройках (вкладка «Позиционирование»), потому что требует либо
+        # протокола layer-shell, либо расширения оболочки.
+        self._positioning = positioning
+        # Как окно поставлено: "layer" (протокол), "x11" (запрос к серверу),
+        # "dbus" (расширение оболочки) или "none" (место выбрал композитор).
         self._position_mode = "none"
         self._monitor_index = monitor_index
 
@@ -192,16 +289,14 @@ class PlaybackWidget(Gtk.ApplicationWindow):
         apply_icon(self)
         self.set_default_size(WIDGET_WIDTH, WIDGET_HEIGHT)
 
+        # Класс на своём окне. Провайдер зарегистрирован на весь дисплей, и
+        # без класса правило «window: прозрачный фон» делало прозрачными и
+        # окно настроек, и любые будущие окна приложения.
+        self.add_css_class("playback-window")
         self._css = Gtk.CssProvider()
         Gtk.StyleContext.add_provider_for_display(
             Gdk.Display.get_default(), self._css,
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
-        )
-        # Прозрачность меняется отдельным провайдером: set_opacity в GTK4 нет.
-        self._opacity_css = Gtk.CssProvider()
-        Gtk.StyleContext.add_provider_for_display(
-            Gdk.Display.get_default(), self._opacity_css,
-            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
         )
 
         self.connect("notify::scale-factor", lambda *_: self._apply_metrics())
@@ -214,7 +309,16 @@ class PlaybackWidget(Gtk.ApplicationWindow):
         self._root.set_margin_bottom(10)
         self._root.set_margin_start(12)
         self._root.set_margin_end(12)
-        self.set_child(self._root)
+
+        # Перетаскивание за свободное место окна — Gtk.WindowHandle, а не свой
+        # GestureClick на контейнере. Свой контроллер получал нажатия, которые
+        # уже ушли детям, и начинал перетаскивание окна: кнопки, список
+        # скорости и пункты меню не срабатывали вовсе. WindowHandle устроен
+        # ровно для этого случая — тянет окно только там, где нажатие не
+        # досталось виджету.
+        self._handle = Gtk.WindowHandle()
+        self._handle.set_child(self._root)
+        self.set_child(self._handle)
 
         # ── Верхний ряд: заголовок и кнопки ──────────────────────────────────
         top_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -241,8 +345,14 @@ class PlaybackWidget(Gtk.ApplicationWindow):
         self._btn_rewind.connect("clicked", lambda _b: self._emit_rewind(-5.0))
         top_row.append(self._btn_rewind)
 
-        self._btn_pause = self._make_button(PAUSE_GLYPH, _("Пауза / Продолжить"),
-                                            "playback-accent")
+        self._btn_pause = Gtk.Button()
+        self._btn_pause.set_size_request(30, 30)
+        self._btn_pause.set_tooltip_text(_("Пауза / Продолжить"))
+        self._btn_pause.add_css_class("playback-accent")
+        # Знак рисуется, а не печатается: глиф «▌▌» в клетке шрифта стоит
+        # не по центру, и на кнопке это видно. См. PauseGlyph.
+        self._pause_glyph = PauseGlyph("pause")
+        self._btn_pause.set_child(self._pause_glyph)
         self._btn_pause.connect("clicked", lambda _b: self._on_pause_resume_clicked())
         top_row.append(self._btn_pause)
 
@@ -280,12 +390,8 @@ class PlaybackWidget(Gtk.ApplicationWindow):
         self._speed_combo.connect("notify::selected", self._on_speed_selected)
         progress_row.append(self._speed_combo)
 
-        # Перетаскивание за свободное место окна и отмена автоскрытия при
-        # наведении: в GTK4 это контроллеры, а не сигналы окна.
-        drag = Gtk.GestureClick()
-        drag.connect("pressed", self._on_background_press)
-        self._root.add_controller(drag)
-
+        # Перетаскивание окна делает WindowHandle (см. _setup_ui), а наведение
+        # мыши отменяет автоскрытие: в GTK4 это контроллер, а не сигнал окна.
         motion = Gtk.EventControllerMotion()
         motion.connect("enter", self._on_enter)
         self._root.add_controller(motion)
@@ -321,12 +427,12 @@ class PlaybackWidget(Gtk.ApplicationWindow):
         self._is_dark = is_dark
         self._accent_color = accent_color
         self._last_theme = (is_dark, accent_color)
+        # Знак паузы рисуется сам, поэтому цвет ему передаётся явно: CSS
+        # применяется к кнопке, а не к содержимому области рисования.
+        if hasattr(self, "_pause_glyph"):
+            self._pause_glyph.set_colour("#e2e8f0" if is_dark else "#0f172a")
         font_label = self._metrics.get("font_label", 13)
         font_button = self._metrics.get("font_button", 12)
-        # Глиф паузы (▌▌) заметно крупнее стрелок при том же кегле: два
-        # закрашенных бруска выглядят тяжелее контурных треугольников. Поэтому
-        # для него отдельный кегль — на 15 % меньше основного.
-        font_pause = max(9, round(font_label * 0.85))
         font_small = self._metrics.get("font_small", 11)
 
         if is_dark:
@@ -351,10 +457,13 @@ class PlaybackWidget(Gtk.ApplicationWindow):
             hover_accent = _lighten(accent_color, 0.87)
 
         corner = self._metrics.get("corner", CORNER_RADIUS)
+        # Фон окна непрозрачный: прозрачность не нужна, окно должно читаться
+        # на любых обоях и не требовать композитинга.
         self._css.load_from_data(
-            f"""
-            window {{
-                background-color: transparent;
+            scope_css(
+                f"""
+            window.playback-window {{
+                background-color: {background};
             }}
             .playback-root {{
                 background-color: {background};
@@ -391,7 +500,6 @@ class PlaybackWidget(Gtk.ApplicationWindow):
                 color: {fg};
                 border: 1px solid {neutral_border};
                 border-radius: 8px;
-                font-size: {font_pause}px;
                 padding: 0;
                 text-shadow: none;
                 box-shadow: none;
@@ -438,7 +546,9 @@ class PlaybackWidget(Gtk.ApplicationWindow):
                 box-shadow: none;
                 padding: 0 4px;
             }}
-            """.encode()
+            """,
+                ".playback-window",
+            ).encode()
         )
         self._label.set_markup(
             f'<span foreground="{fg}" size="small" weight="bold">'
@@ -521,19 +631,48 @@ class PlaybackWidget(Gtk.ApplicationWindow):
             self.apply_theme(*self._last_theme)
 
     def _place_window(self) -> None:
-        """Поставить окно в правый нижний угол доступным способом.
+        """Поставить окно в правый нижний угол, если это включено в настройках.
 
-        Порядок: протокол layer-shell, затем X11, затем хелпер оболочки по
-        D-Bus. Первые два работают до показа окна, третий — только после:
-        хелпер адресует окно номером из списка оболочки, а до map окна в этом
-        списке нет. Поэтому для него запоминается отложенное состояние.
+        По умолчанию глобальное позиционирование выключено: место окна выбирает
+        композитор, как для любого другого приложения. Включённый режим требует
+        либо протокола layer-shell (не в stock-mutter, а поверхность в слое
+        OVERLAY перекрывает панели и попапы), либо расширения оболочки
+        «Window Calls».
+
+        Порядок внутри включённого режима: layer-shell, затем X11, затем
+        расширение оболочки по D-Bus. Первые два работают до показа окна,
+        третье — только после: расширение адресует окно номером из своего
+        списка, а до map окна в этом списке нет.
         """
+        if self._positioning == "off":
+            self._position_mode = "none"
+            return
+
         width = self._metrics.get("width", WIDGET_WIDTH)
         height = self._metrics.get("height", WIDGET_HEIGHT)
-        self._position_mode = layer_shell.place_bottom_right(
-            self, width, height, margin=16, monitor_index=self._monitor_index)
-        if self._position_mode == "none" and window_placement.available():
+        method = self._positioning
+
+        if method in ("auto", "layer"):
+            self._position_mode = layer_shell.place_bottom_right(
+                self, width, height, margin=16, monitor_index=self._monitor_index)
+            if self._position_mode != "none" or method == "layer":
+                return
+
+        # Расширение оболочки: точный способ под Wayland, но окно в его списке
+        # появляется только после показа, поэтому позиция ставится отложенно.
+        if method in ("auto", "shell") and window_placement.available():
             self._position_mode = "dbus-pending"
+
+    def set_positioning(self, positioning: str) -> None:
+        """Сменить режим позиционирования (вкладка настроек «Позиционирование»).
+
+        Смена вступает в силу сразу: следующая установка позиции пойдёт по
+        новому режиму, без перезапуска приложения.
+        """
+        if positioning == self._positioning:
+            return
+        self._positioning = positioning
+        self._place_window()
 
     def _place_after_show(self) -> None:
         """Доделать позицию через хелпер, когда окно уже показано."""
@@ -553,10 +692,12 @@ class PlaybackWidget(Gtk.ApplicationWindow):
     def restore_position(self, x: int, y: int) -> None:
         """Вернуть окно на сохранённое место (только если это возможно).
 
-        Под layer-shell место задаёт композитор, а под Wayland без протокола
-        двигать окно нельзя вовсе — тогда вызов честно ничего не делает.
+        Позицию задаёт композитор, если глобальное позиционирование выключено
+        (по умолчанию) или недоступно — тогда вызов честно ничего не делает.
         """
-        if self._position_mode == "layer":
+        if self._positioning == "off":
+            return
+        if self._position_mode in ("layer", "dbus-failed"):
             return
         if x < 0 or y < 0:
             self._place_window()
@@ -611,36 +752,29 @@ class PlaybackWidget(Gtk.ApplicationWindow):
         self._hide_timer = GLib.timeout_add(max(1, int(delay_ms)), self._begin_fade_out)
 
     def _begin_fade_out(self) -> bool:
+        """Скрыть окно после паузы бездействия.
+
+        Затухание убрано вместе с прозрачностью: окно исчезает разом.
+        """
         self._hide_timer = None
-        self._stop_fade()
-        self._fade_source = GLib.timeout_add(16, self._fade_step, 1.0)
+        self.set_visible(False)
         return False  # одноразовый таймер
 
-    def _fade_step(self, opacity: float) -> bool:
-        opacity -= 0.08
-        if opacity <= 0.0:
-            self._set_opacity(0.0)
-            self._fade_source = None
-            self.set_visible(False)
-            return False
-        self._set_opacity(opacity)
-        self._fade_source = GLib.timeout_add(16, self._fade_step, opacity)
-        return False
-
     def _set_opacity(self, value: float) -> None:
-        """Прозрачность окна через CSS: ``set_opacity`` в GTK4 удалён."""
+        """Совместимость: прозрачности больше нет, значение запоминается.
+
+        Метод оставлен, потому что его вызывают места, где раньше
+        восстанавливали видимость окна после затухания.
+        """
         self._opacity = max(0.0, min(1.0, float(value)))
-        self._opacity_css.load_from_data(
-            f".playback-root {{ opacity: {self._opacity:.2f}; }}".encode())
 
     def get_opacity(self) -> float:
-        """Текущая прозрачность — для проверок и журнала."""
+        """Текущее значение — всегда 1.0; для проверок и журнала."""
         return getattr(self, "_opacity", 1.0)
 
     def _stop_fade(self) -> None:
-        if self._fade_source is not None:
-            GLib.source_remove(self._fade_source)
-            self._fade_source = None
+        """Совместимость: затухания больше нет, останавливать нечего."""
+        self._fade_source = None
 
     def _cancel_hide_timer(self) -> None:
         if self._hide_timer is not None:
@@ -654,7 +788,7 @@ class PlaybackWidget(Gtk.ApplicationWindow):
 
     def set_paused(self, paused: bool) -> None:
         self._is_paused = paused
-        self._btn_pause.set_label(PLAY_GLYPH if paused else PAUSE_GLYPH)
+        self._pause_glyph.set_state("play" if paused else "pause")
         self._label.set_text(_("Пауза") if paused else _("🔊 Воспроизведение"))
 
     def set_speed(self, speed: float) -> None:
@@ -704,16 +838,6 @@ class PlaybackWidget(Gtk.ApplicationWindow):
         self.set_progress(self._progress._fraction)
         if self.on_speed_changed:
             self.on_speed_changed(self.get_speed())
-
-    def _on_background_press(self, gesture, _n_press, x: float, y: float) -> None:
-        """Перетаскивание окна за фон: дети события не отдают, только пустые места."""
-        if gesture.get_current_button() != 1:
-            return
-        surface = self.get_surface()
-        device = gesture.get_current_event_device()
-        if surface is None or device is None:
-            return
-        surface.begin_move(device, 1, x, y, gesture.get_current_event_time())
 
     def _on_enter(self, _controller, _x: float, _y: float) -> None:
         """Наведение мышью отменяет автоскрытие, как в исходной версии."""

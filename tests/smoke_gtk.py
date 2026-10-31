@@ -148,9 +148,41 @@ w.apply_theme(is_dark=True, accent_color="#6366f1")
 w.set_progress(0.42)
 check("set_progress не падает", True)
 w.set_paused(True)
-check("пауза меняет подпись кнопки", w._btn_pause.get_label() == "▶", w._btn_pause.get_label())
+# Знак рисуется, а не печатается: проверяем состояние рисунка, а не подпись.
+check("пауза переключает знак на «продолжить»",
+      w._pause_glyph._state == "play", w._pause_glyph._state)
 w.set_paused(False)
+check("снятие паузы возвращает знак паузы",
+      w._pause_glyph._state == "pause", w._pause_glyph._state)
 w.set_speed(1.75)
+
+# Знак паузы должен стоять по центру кнопки. Печатный глиф «▌▌» занимает
+# половину клетки шрифта и уезжал влево; рисованный центрируется геометрией.
+# Проверяем по прямоугольникам знака: cairo в образе сборки нет.
+bars = w._pause_glyph.bars(30, 30)
+left_edge = min(x for x, _y, _w, _h in bars)
+right_edge = max(x + bar_w for x, _y, bar_w, _h in bars)
+top_edge = min(y for _x, y, _w, _h in bars)
+bottom_edge = max(y + bar_h for _x, y, _w, bar_h in bars)
+check("знак паузы — два бруска", len(bars) == 2, f"брусков {len(bars)}")
+check("знак паузы по центру по горизонтали",
+      abs((left_edge + right_edge) / 2 - 15) <= 0.5,
+      f"центр знака {(left_edge + right_edge) / 2}, центр кнопки 15")
+check("знак паузы по центру по вертикали",
+      abs((top_edge + bottom_edge) / 2 - 15) <= 0.5,
+      f"центр знака {(top_edge + bottom_edge) / 2}, центр кнопки 15")
+check("бруски не слиплись",
+      bars[1][0] - (bars[0][0] + bars[0][2]) > 1.0,
+      f"зазор {bars[1][0] - (bars[0][0] + bars[0][2]):.1f} px")
+
+# Перетаскивание окна не должно перехватывать нажатия у кнопок: за это
+# отвечает WindowHandle, а не свой GestureClick на контейнере.
+check("перетаскивание окна — WindowHandle",
+      isinstance(w.get_child(), __import__("gi.repository", fromlist=["Gtk"]).Gtk.WindowHandle),
+      type(w.get_child()).__name__)
+check("на контейнере нет перехватчика нажатий",
+      not any(type(c).__name__ == "GestureClick" for c in w._root.observe_controllers()),
+      ", ".join(type(c).__name__ for c in w._root.observe_controllers()))
 check("set_speed выбирает значение в списке", abs(w.get_speed() - 1.75) < 1e-6,
       str(w.get_speed()))
 check("скорость — выпадающий список, а не шкала", isinstance(w._speed_combo, Gtk.DropDown),
@@ -194,7 +226,8 @@ dlg = SettingsWindow(
     on_preview_voice=lambda sp, speed: calls.append(("preview", sp, speed)),
     theme_manager=tm,
 )
-check("четыре вкладки", dlg._notebook.get_n_pages() == 4, str(dlg._notebook.get_n_pages()))
+check("пять вкладок: клавиши, голос, вид, позиционирование, ИИ",
+      dlg._notebook.get_n_pages() == 5, str(dlg._notebook.get_n_pages()))
 check("горячие клавиши подставлены", dlg._hk_selection.get_label() != "", dlg._hk_selection.get_label())
 check("голос ru выбран", dlg.selected_voice() == "xenia", dlg.selected_voice())
 check("голосов ru три", len(dlg._voices_by_lang["ru"]) == 3, str(dlg._voices_by_lang))
