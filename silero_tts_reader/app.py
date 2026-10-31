@@ -33,6 +33,7 @@ from . import (  # noqa: E402
     log,
 )
 from .config.config_manager import ConfigManager  # noqa: E402
+from .core.accent import load_overrides  # noqa: E402
 from .core.audio_player import AudioPlayer  # noqa: E402
 from .core.hotkey_listener import HotkeyListener  # noqa: E402
 from .core.text_extractor import TextExtractor  # noqa: E402
@@ -85,6 +86,9 @@ class Application(Gtk.Application):
         self._engine = TTSEngine(
             sample_rate=self._config.sample_rate,
             models=self._config.models,
+            accent_mode=self._config.stress_dict,
+            accent_overrides=load_overrides(self._config.stress_file),
+            abbreviations=self._config.abbreviations,
         )
         self._hotkey_listener = HotkeyListener()
         self._stop_event = threading.Event()

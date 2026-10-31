@@ -44,8 +44,18 @@ class TTSEngine:
         model_path: str | None = None,
         sample_rate: int = 48000,
         models: dict[str, str] | None = None,
+        accent_mode: str = "off",
+        accent_overrides: dict[str, str] | None = None,
+        abbreviations: str = "off",
     ) -> None:
         self._sample_rate = sample_rate
+        # Ударения по словарю только для русского: словарь русский, а
+        # английской модели посторонние знаки в тексте только мешают.
+        self._accent_mode = accent_mode
+        self._accent_overrides = accent_overrides or {}
+        self._accentor = None
+        self._abbrev_mode = abbreviations
+        self._abbrev = None
         self._paths: dict[str, Path] = {}
         for lang, path in (models or {}).items():
             if lang in MODELS and path:
@@ -117,6 +127,9 @@ class TTSEngine:
             speakers = self._speakers.get(lang, [])
             voice = self._pick_speaker(speaker, lang, speakers)
             prepared = self._prepare_text(text, profile)
+            if lang == "ru":
+                prepared = self._expand_abbreviations(prepared)
+                prepared = self._apply_accents(prepared)
 
             log.detail(
                 f"[TTSEngine] apply_tts(lang={lang}, speaker={voice!r}): {prepared!r}")
@@ -304,6 +317,28 @@ class TTSEngine:
             if candidate != "random":
                 return candidate
         return speakers[0] if speakers else (speaker or "")
+
+    def _expand_abbreviations(self, text: str) -> str:
+        """Развернуть сокращения до ударений: ударения ставятся по словам."""
+        if self._abbrev_mode == "off" or not text:
+            return text
+        if self._abbrev is None:
+            from .abbrev import Abbreviations
+
+            self._abbrev = Abbreviations(
+                generic=self._abbrev_mode == "all")
+        return self._abbrev.expand(text)
+
+    def _apply_accents(self, text: str) -> str:
+        """Разметить ударения словарём. Модель уважает поставленный знак."""
+        if self._accent_mode == "off" or not text:
+            return text
+        if self._accentor is None:
+            from .accent import Accentor
+
+            self._accentor = Accentor(
+                mode=self._accent_mode, overrides=self._accent_overrides)
+        return self._accentor.accent_text(text)
 
     @staticmethod
     def _prepare_text(text: str, profile: ModelProfile | None) -> str:

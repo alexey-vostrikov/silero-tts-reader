@@ -156,6 +156,13 @@ cp -a silero_tts_reader/__init__.py silero_tts_reader/i18n.py \
     silero_tts_reader/log.py silero_tts_reader/run_options.py \
     silero_tts_reader/models.py silero_tts_reader/config silero_tts_reader/core \
     "$COMMON_ROOT$APP_ROOT/silero_tts_reader/"
+# Значок и данные речи (ударения, сокращения) — рядом с кодом: их ищет
+# data_dir(), а не тема рабочего стола.
+install -d "$COMMON_ROOT$APP_ROOT/silero_tts_reader/assets"
+cp -a silero_tts_reader/assets/icon.png \
+    "$COMMON_ROOT$APP_ROOT/silero_tts_reader/assets/"
+cp -a silero_tts_reader/assets/stress silero_tts_reader/assets/speech \
+    "$COMMON_ROOT$APP_ROOT/silero_tts_reader/assets/"
 find "$COMMON_ROOT$APP_ROOT" -name '__pycache__' -type d -prune -exec rm -rf {} +
 find "$COMMON_ROOT$APP_ROOT" -name '*.py[co]' -delete
 # Переводы интерфейса: /usr/share/locale/<lang>/LC_MESSAGES/<domain>.mo

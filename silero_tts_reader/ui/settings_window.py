@@ -649,6 +649,73 @@ class SettingsWindow(Gtk.Dialog):
             no_rb.set_name("hint")
             speed_row.append(no_rb)
 
+        # ── Чтение текста ────────────────────────────────────────────────────
+        speech_group = Gtk.Frame(label=_("ЧТЕНИЕ ТЕКСТА"))
+        speech_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        speech_box.set_margin_top(10)
+        speech_box.set_margin_bottom(10)
+        speech_box.set_margin_start(10)
+        speech_box.set_margin_end(10)
+        speech_group.set_child(speech_box)
+        page.append(speech_group)
+
+        stress_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        stress_row.append(self._label(_("Ударения:")))
+        self._stress_combo = Gtk.ComboBoxText()
+        for value, title in (
+            ("off", _("Как решит модель")),
+            ("user", _("Только мои правки")),
+            ("dict", _("Словарь и мои правки")),
+        ):
+            self._stress_combo.append(value, title)
+        self._stress_combo.set_active_id(self._config.stress_dict)
+        self._stress_combo.connect(
+            "changed",
+            lambda combo: self._pending.update(
+                {"stress_dict": combo.get_active_id() or "off"}
+            ),
+        )
+        stress_row.append(self._stress_combo)
+        stress_row.set_tooltip_text(_(
+            "Словарь расставляет ударения без нейросети: он выручает на словах "
+            "вроде «звонят» и «договор», где модель ошибается. "
+            "Встроенный словарь правится файлом stress.json в каталоге настроек."
+        ))
+        speech_box.append(stress_row)
+
+        abbrev_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        abbrev_row.append(self._label(_("Сокращения:")))
+        self._abbrev_combo = Gtk.ComboBoxText()
+        for value, title in (
+            ("known", _("Известные и сокращения с точкой")),
+            ("all", _("Все заглавные — по буквам")),
+            ("off", _("Не разворачивать")),
+        ):
+            self._abbrev_combo.append(value, title)
+        self._abbrev_combo.set_active_id(self._config.abbreviations)
+        self._abbrev_combo.connect(
+            "changed",
+            lambda combo: self._pending.update(
+                {"abbreviations": combo.get_active_id() or "known"}
+            ),
+        )
+        abbrev_row.append(self._abbrev_combo)
+        abbrev_row.set_tooltip_text(_(
+            "«т.д.» читается как «так далее», «РФ» — как «эр эф». "
+            "Режим «все заглавные» разбирает по буквам и незнакомые "
+            "аббревиатуры, но может ошибиться на тех, что читаются словом."
+        ))
+        speech_box.append(abbrev_row)
+
+        speech_hint = Gtk.Label(
+            label=_("Сокращения с неоднозначным смыслом («г.», «с.») "
+                    "не разворачиваются: неверная расшифровка хуже пропуска.")
+        )
+        speech_hint.set_xalign(0.0)
+        speech_hint.set_wrap(True)
+        speech_hint.set_name("hint")
+        speech_box.append(speech_hint)
+
         # ── Паузы ────────────────────────────────────────────────────────────
         pause_group = Gtk.Frame(label=_("ПАУЗЫ"))
         pause_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -1203,7 +1270,7 @@ class SettingsWindow(Gtk.Dialog):
                 self._config.set_speaker(str(language), str(voice))
 
         for key in ("speed", "theme", "use_system_accent", "window_positioning",
-                    "log_level"):
+                    "log_level", "stress_dict", "abbreviations"):
             if key in self._pending:
                 setattr(self._config, key, self._pending[key])
 
