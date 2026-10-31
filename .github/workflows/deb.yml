@@ -120,6 +120,10 @@ jobs:
           python3 tests/test_css_scope.py
           # Ударения по словарю: словарь, омографы, правки, скорость
           python3 tests/test_accent.py
+          # Выбор источника ударений: словарь, Silero Stress, ruaccent
+          python3 tests/test_stress_source.py
+          # Окружение для пакетов, которых нет в apt: путь, метаданные, отказы
+          python3 tests/test_extras.py
           # Сокращения: расшифровки, аббревиатуры, неоднозначные случаи
           python3 tests/test_abbrev.py
           # Модуль speech-dispatcher: только ru/en, перезапуск демона

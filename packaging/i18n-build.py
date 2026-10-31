@@ -287,17 +287,26 @@ TRANSLATIONS = {
         "words like «звонят» and «договор», where the model gets it wrong. "
         "Correct the built-in dictionary in stress.json inside the settings folder.",
     "Источник ударений:": "Stress source:",
-    "ruaccent, если установлен": "ruaccent if installed",
+    "Silero Stress, затем ruaccent": "Silero Stress, then ruaccent",
+    "Только Silero Stress": "Silero Stress only",
+    "Установить…": "Install…",
+    "нет: ~{size} МБ": "missing: ~{size} MB",
+    "ставлю ~{size} МБ…": "installing ~{size} MB…",
+    "{title}: установлен": "{title}: installed",
+    "не удалось: {detail}": "failed: {detail}",
     "Только словарь": "Dictionary only",
     "Только ruaccent": "ruaccent only",
-    "ruaccent размечает все слова по контексту и решает омографы "
-    "(«окна» и «окна́»), но требует отдельной установки и 160 МБ "
-    "моделей. Словарь работает всегда, однако омографы оставляет "
-    "акцентору модели.":
-        "ruaccent marks every word from context and resolves homographs "
-        "(«окна» and «окна́»), but needs a separate install and 160 MB of "
-        "models. The dictionary always works, yet leaves homographs to the "
-        "model accentor.",
+    "Silero Stress и ruaccent размечают все слова по контексту и "
+    "решают омографы («окна» и «окна́»), но ставятся отдельно: "
+    "первый занимает 50 МБ и довольствуется torch, второй — 160 МБ "
+    "и тянет onnxruntime с transformers. Словарь работает всегда, "
+    "однако омографы оставляет акцентору модели.":
+        "Silero Stress and ruaccent mark every word from context and "
+        "resolve homographs («окна» and «окна́»), but are installed "
+        "separately: the first takes 50 MB and only needs torch, the "
+        "second takes 160 MB and pulls onnxruntime with transformers. The "
+        "dictionary always works, yet leaves homographs to the model "
+        "accentor.",
     "Предыдущая фраза или её начало": "Previous sentence or its start",
     "Середина прошлой фразы, её начало или −5 секунд":
         "Middle of previous sentence, its start, or −5 seconds",

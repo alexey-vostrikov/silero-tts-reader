@@ -6,9 +6,12 @@ from silero_tts_reader.app import Application
 from silero_tts_reader.i18n import _
 from silero_tts_reader.run_options import (
     HELP_FLAGS,
+    INSTALL_EXTRAS_FLAG,
+    LIST_EXTRAS_FLAG,
     VERSION_FLAGS,
     OptionError,
     help_text,
+    parse_extras_command,
     parse_run_options,
 )
 
@@ -27,6 +30,30 @@ def main() -> None:
     if any(arg in VERSION_FLAGS for arg in sys.argv[1:]):
         print(f"{PROGRAM} {info.describe()}", flush=True)
         sys.exit(0)
+
+    # Пакеты, которых нет в apt: спросить или поставить — и выйти. Приложение
+    # здесь не нужно, и трей с окном были бы помехой: установка идёт минутами
+    # и печатает ход в ту же консоль.
+    extras_command = parse_extras_command(sys.argv)
+    if extras_command is not None:
+        command, keys = extras_command
+        from silero_tts_reader.core import extras
+
+        if command == LIST_EXTRAS_FLAG:
+            extras.describe()
+            sys.exit(0)
+        if command != INSTALL_EXTRAS_FLAG:
+            # Такого быть не может, но молча запускать приложение вместо
+            # установки — худший из возможных ответов.
+            print(f"  ✗ неизвестная команда: {command}", file=sys.stderr,
+                  flush=True)
+            sys.exit(2)
+        try:
+            code = extras.install(keys or None)
+        except (RuntimeError, ValueError) as exc:
+            print(f"  ✗ {exc}", file=sys.stderr, flush=True)
+            sys.exit(1)
+        sys.exit(code)
 
     # Ключи отладки вынимаются ДО создания Gtk.Application: GApplication
     # разбирает аргументы сам и на незнакомый ключ завершается с ошибкой.

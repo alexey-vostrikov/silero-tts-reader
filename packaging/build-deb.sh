@@ -218,7 +218,7 @@ add_docs "$COMMON_ROOT" "$COMMON"
 
 build_pkg "$COMMON" "$COMMON_ROOT" <<CONTROL
 Depends: python3 (>= 3.10), python3-numpy, python3-scipy
-Recommends: python3-sounddevice, python3-torch, python3-pynput, zstd
+Recommends: python3-sounddevice, python3-torch, python3-pynput, zstd, python3-venv
 Suggests: python3-pyrubberband
 Description: Silero TTS shared settings, configuration and synthesis engine
  Common part of the Silero TTS packages: interface translations (ru_RU is the
@@ -351,7 +351,7 @@ chmod 0644 "$READER_ROOT/usr/share/doc/$READER/README.md.gz"
 
 build_pkg "$READER" "$READER_ROOT" <<CONTROL
 Depends: $COMMON (= $DEB_VERSION), python3 (>= 3.10), python3-gi, gir1.2-glib-2.0, gir1.2-gtk-4.0, libgtk4-layer-shell0, python3-xlib
-Recommends: python3-sounddevice, python3-torch, python3-pynput, python3-evdev, gsettings-desktop-schemas, xdotool, xclip
+Recommends: python3-sounddevice, python3-torch, python3-pynput, python3-evdev, gsettings-desktop-schemas, xdotool, xclip, python3-venv
 Suggests: python3-pyrubberband
 Description: Silero TTS reader with global hotkeys and system tray
  Reads the selected text or the clipboard aloud using the Silero TTS v5 model.

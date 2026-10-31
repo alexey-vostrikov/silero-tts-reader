@@ -75,6 +75,26 @@ silero-tts-reader \- чтение текста и книг вслух (Silero TT
 .B \-\-debug
 То же, что
 .BR "\-\-log-level debug" .
+.SS Дополнительные пакеты
+Пакетов, которых нет в репозитории Ubuntu, приложение системно не ставит.
+Всё такое складывается в отдельное окружение
+.I ~/.local/share/silero-tts-reader/venv
+с доступом к системным пакетам, поэтому torch, numpy и PyGObject берутся из apt,
+а внутрь попадает только отсутствующее. Права root не нужны, системный Python
+остаётся нетронутым.
+.TP
+.B \-\-list-extras
+Показать, что доступно, что уже установлено и сколько места занимает.
+.TP
+.BI \-\-install-extras " [КЛЮЧ…]"
+Поставить пакеты в это окружение. Без ключей ставится
+.BR silero-stress .
+Доступные ключи:
+.BR stress " (Silero Stress),"
+.BR ruaccent ","
+.BR rate " (pyrubberband)."
+Установка ничего не делает молча: без этого ключа сеть при запуске не
+используется.
 .SH ПРИМЕРЫ
 .TP
 .B silero-tts-reader книга.fb2 \-\-max-time 120
@@ -82,6 +102,14 @@ silero-tts-reader \- чтение текста и книг вслух (Silero TT
 .TP
 .B silero-tts-reader книга.fb2 \-\-exit-after-play
 Прочитать целиком и выйти из приложения.
+.TP
+.B silero-tts-reader \-\-install-extras
+.br
+.ns
+.TP
+.B silero-tts-reader \-\-list-extras
+.br
+.ns
 .TP
 .B silero-tts-reader глава.txt \-\-debug
 Подробный журнал в консоль: видно, как текст прошёл обработку и синтез.
