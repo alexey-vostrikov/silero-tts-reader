@@ -17,6 +17,7 @@ from typing import Any
 
 import numpy as np
 
+from .. import log
 from ..i18n import _
 from ..models import DEFAULT_LANG, MODELS, ModelProfile, resolve_language, split_by_script
 
@@ -117,8 +118,8 @@ class TTSEngine:
             voice = self._pick_speaker(speaker, lang, speakers)
             prepared = self._prepare_text(text, profile)
 
-            print(f"[TTSEngine] apply_tts(lang={lang}, speaker={voice!r}): {prepared!r}",
-                  flush=True)
+            log.detail(
+                f"[TTSEngine] apply_tts(lang={lang}, speaker={voice!r}): {prepared!r}")
             kwargs: dict[str, Any] = {
                 "text": prepared,
                 "speaker": voice,
@@ -133,8 +134,9 @@ class TTSEngine:
                 audio = model.apply_tts(**kwargs)
             res = audio.numpy().astype(np.float32)
 
-        print(f"[TTSEngine] Сгенерирован аудиомассив длины {len(res)} сэмплов "
-              f"({len(res) / self._sample_rate:.2f} сек)", flush=True)
+        log.debug(
+            f"[TTSEngine] Сгенерирован аудиомассив длины {len(res)} сэмплов "
+            f"({len(res) / self._sample_rate:.2f} сек)")
         return res
 
     def synthesize_mixed(
@@ -177,8 +179,9 @@ class TTSEngine:
             return np.zeros(0, dtype=np.float32)
 
         audio = np.concatenate(pieces)
-        print(f"[TTSEngine] Смешанный текст: языки по порядку {used_languages}, "
-              f"{len(audio) / self._sample_rate:.2f} с", flush=True)
+        log.detail(
+            f"[TTSEngine] Смешанный текст: языки по порядку {used_languages}, "
+            f"{len(audio) / self._sample_rate:.2f} с")
         return audio
 
     def split_into_segments(self, text: str, max_chars: int = 800) -> list[str]:

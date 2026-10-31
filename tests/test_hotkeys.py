@@ -141,8 +141,13 @@ def test_advice_uses_input_group() -> None:
     check("перелогин" in hint, "сказано про перелогин: без него группа не применится")
 
     # Ветка «ни evdev, ни pynput»: совет должен дойти до вывода целиком.
+    # evdev принудительно выключается: на машине с доступом к /dev/input он
+    # нашёл бы клавиатуры и увел бы выполнение в другую ветку, где совета нет
+    # и не должно быть.
     hl.pynput_keyboard = None
     hl.HAS_PYNPUT = False
+    saved_evdev = hl.HAS_EVDEV
+    hl.HAS_EVDEV = False
     facade = hl.HotkeyListener()
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
@@ -155,8 +160,48 @@ def test_advice_uses_input_group() -> None:
             on_stop=lambda: None,
         )
     text = output.getvalue()
+    hl.HAS_EVDEV = saved_evdev
     check(hint in text, "ветка без бэкенда печатает совет про группу input")
     check("chmod 666" not in text, "вывод предлагает только группу input")
+
+    # Наоборот: когда evdev доступен, хоткеи работают и совета быть не должно —
+    # иначе пользователь с рабочей машиной будет чинить то, что не сломано.
+    # Подменяется сам класс целиком: get_keyboards — статический метод, и
+    # лабораторная подмена одного атрибута ломает вызов из set_hotkeys.
+    class _StubEvdev:
+        @staticmethod
+        def get_keyboards():
+            return [object()]
+
+        def set_hotkeys(self, _map) -> None:
+            pass
+
+        def is_alive(self) -> bool:
+            return False
+
+        def start(self) -> None:
+            pass
+
+    hl.HAS_EVDEV = True
+    saved_listener = hl.EvdevHotkeyListener
+    hl.EvdevHotkeyListener = _StubEvdev  # type: ignore[assignment]
+    try:
+        facade = hl.HotkeyListener()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            facade.set_hotkeys(
+                speak_selection="ctrl+alt+r",
+                speak_clipboard="ctrl+alt+c",
+                stop="ctrl+alt+s",
+                on_speak_selection=lambda: None,
+                on_speak_clipboard=lambda: None,
+                on_stop=lambda: None,
+            )
+        check(hint not in output.getvalue(),
+              "evdev работает — совета про группу input нет")
+    finally:
+        hl.EvdevHotkeyListener = saved_listener  # type: ignore[assignment]
+        hl.HAS_EVDEV = saved_evdev
 
 
 def test_advice_in_pynput_branch() -> None:

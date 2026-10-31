@@ -43,6 +43,8 @@ TRANSLATIONS = {
     "\n  Нажмите Ctrl+C в терминале для выхода\n":
         "\n  Press Ctrl+C in the terminal to quit\n",
 
+    "  справка: {program} --help": "  see: {program} --help",
+
     "Текст не выделен": "No text selected",
     "Модель TTS ещё загружается, подождите...": "The TTS model is still loading, please wait…",
     "Буфер обмена не содержит текст": "The clipboard contains no text",
@@ -114,6 +116,34 @@ TRANSLATIONS = {
     "Остановить:": "Stop:",
     "Тема приложения:": "Application theme:",
     "Значок в трее:": "Tray icon:",
+    "ПОЛОЖЕНИЕ ОКНА ПЛЕЕРА": "PLAYER WINDOW POSITION",
+    "ЖУРНАЛ ДИАГНОСТИКИ": "DIAGNOSTIC LOG",
+    "Только ошибки": "Errors only",
+    "Обычный": "Normal",
+    "Подробный": "Verbose",
+    "Отладка (с текстом и ответами ИИ)": "Debug (with text and AI responses)",
+    "Подробность журнала:": "Log verbosity:",
+    "Уровень действует на следующий запуск: журнал печатается в консоль, "
+    "из которой запущено приложение. Ключ --log-level перекрывает эту "
+    "настройку только на время запуска и её не меняет.":
+        "The level applies to the next run: the log is printed to the console "
+        "the application was started from. The --log-level flag overrides this "
+        "setting for one run only and does not change it.",
+    "Ставить окно в угол экрана:": "Place the window in a screen corner:",
+    "Способ:": "Method:",
+    "Авто (что доступно в системе)": "Auto (whatever the system provides)",
+    "Протокол layer-shell": "layer-shell protocol",
+    "Расширение оболочки (Window Calls)": "Shell extension (Window Calls)",
+    "Выключено по умолчанию: место окна выбирает оконный менеджер.\n"
+    "Включение требует либо протокола layer-shell (в обычном GNOME его нет), "
+    "либо расширения оболочки Window Calls. Слой layer-shell перекрывает "
+    "панели и всплывающие меню, поэтому при проблемах со нажатиями "
+    "оставьте этот режим выключенным.":
+        "Off by default: the window manager decides where the window goes.\n"
+        "Turning this on needs either the layer-shell protocol (not present in "
+        "stock GNOME) or the Window Calls shell extension. The layer-shell "
+        "surface sits above panels and popup menus, so if clicks misbehave, "
+        "leave this mode off.",
     "Авто (по системной теме)": "Auto (follow system theme)",
     "Светлый штрих (для тёмной панели)": "Light strokes (for dark panel)",
     "Тёмный штрих (для светлой панели)": "Dark strokes (for light panel)",

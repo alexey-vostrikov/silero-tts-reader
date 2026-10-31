@@ -128,6 +128,7 @@ def _num_to_ru_phrase(val: int) -> str:
     return " ".join(parts).strip()
 
 
+from .. import log  # noqa: E402
 from ..i18n import _  # noqa: E402
 
 
@@ -304,7 +305,7 @@ class TextProcessor:
             result = TextProcessor.transliterate_offline(result)
 
         cleaned = result.strip()
-        print(f"[TextProcessor] Очищенный результат для TTS: {cleaned!r}", flush=True)
+        log.debug(f"[TextProcessor] Очищенный результат для TTS: {cleaned!r}")
         return cleaned
 
     @staticmethod
@@ -351,7 +352,7 @@ class TextProcessor:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = json.loads(resp.read().decode("utf-8"))
             raw_result = body["choices"][0]["message"]["content"].strip()
-            print(f"[TextProcessor] Сырой ответ от ИИ API: {raw_result!r}", flush=True)
+            log.debug(f"[TextProcessor] Сырой ответ от ИИ API: {raw_result!r}")
             return TextProcessor._clean_llm_response(raw_result, text)
 
     @staticmethod
@@ -393,7 +394,7 @@ class TextProcessor:
     @classmethod
     def process_text(cls, text: str, config: ConfigManager) -> str:
         """Main text processing entry point."""
-        print(f"[TextProcessor] Входной текст: {text!r}", flush=True)
+        log.debug(f"[TextProcessor] Входной текст: {text!r}")
         if not text:
             return text
 
@@ -401,7 +402,7 @@ class TextProcessor:
         if getattr(config, "ignore_urls", True):
             stripped = cls.strip_urls(text)
             if stripped != text:
-                print(f"[TextProcessor] Удалены ссылки из текста: {stripped!r}", flush=True)
+                log.debug(f"[TextProcessor] Удалены ссылки из текста: {stripped!r}")
                 text = stripped
                 if not text:
                     return ""
@@ -418,7 +419,7 @@ class TextProcessor:
             return text
 
         has_latin = cls.has_non_cyrillic(text)
-        print(f"[TextProcessor] Содержит латиницу: {has_latin} (use_llm={config.transliteration_use_llm})", flush=True)
+        log.detail(f"[TextProcessor] Содержит латиницу: {has_latin} (use_llm={config.transliteration_use_llm})")
         if not has_latin:
             return text
 
