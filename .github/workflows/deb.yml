@@ -122,6 +122,8 @@ jobs:
           python3 tests/test_accent.py
           # Сокращения: расшифровки, аббревиатуры, неоднозначные случаи
           python3 tests/test_abbrev.py
+          # Модуль speech-dispatcher: только ru/en, перезапуск демона
+          python3 tests/test_speechd_control.py
           # Диалоги: показ без run(), ссылка держится, папка как Gio.File
           xvfb-run -a python3 tests/test_dialogs.py
           # Локализация: каталог свежий, все строки переведены, ни одна не забыта
