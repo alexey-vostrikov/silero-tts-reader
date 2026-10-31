@@ -21,6 +21,7 @@ os.environ.setdefault("PYNPUT_BACKEND", "xorg")
 
 import gi
 
+gi.require_version("Gdk", "4.0")
 gi.require_version("Gio", "2.0")
 gi.require_version("Gtk", "4.0")
 
@@ -370,8 +371,17 @@ class Application(Gtk.Application):
         иконку с шины, а следующий запуск получает занятое имя D-Bus.
         """
         try:
-            GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGTERM, self._on_sigterm)
-            GLib.unix_signal_add(GLib.PRIORITY_HIGH, signal.SIGINT, self._on_sigterm)
+            # GLib.unix_signal_add в PyGObject 3.50+ объявлен устаревшим:
+            # обработчик переехал в GLibUnix.signal_add. Берём новый, если он
+            # есть, иначе остаётся старый.
+            try:
+                from gi.repository import GLibUnix
+
+                add = GLibUnix.signal_add
+            except (ImportError, AttributeError):
+                add = GLib.unix_signal_add
+            add(GLib.PRIORITY_HIGH, signal.SIGTERM, self._on_sigterm)
+            add(GLib.PRIORITY_HIGH, signal.SIGINT, self._on_sigterm)
         except Exception:
             pass  # не критично: остаётся обычное поведение по умолчанию
 
