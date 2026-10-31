@@ -50,7 +50,10 @@ MODES = (MODE_OFF, MODE_USER, MODE_DICT)
 SOURCE_AUTO = "auto"
 SOURCE_DICTIONARY = "dictionary"
 SOURCE_RUACCENT = "ruaccent"
-SOURCES = (SOURCE_AUTO, SOURCE_DICTIONARY, SOURCE_RUACCENT)
+# Silero Stress: та же компания, что и синтез. Отдельная зависимость не нужна
+# там, где уже стоит torch; омографы решаются по контексту.
+SOURCE_SILERO = "silero-stress"
+SOURCES = (SOURCE_AUTO, SOURCE_DICTIONARY, SOURCE_RUACCENT, SOURCE_SILERO)
 
 _WORD_RE = re.compile(r"[А-Яа-яЁё]+")
 # Деление на предложения с сохранением знаков: split делит по захваченной
@@ -238,7 +241,7 @@ class RuAccentBackend:
 
     def __init__(self, models_dir: Path | None = None,
                  model_size: str = "tiny") -> None:
-        from ruaccent import RUAccent
+        RUAccent = _load_extra("ruaccent").RUAccent
 
         if models_dir is None:
             models_dir = (Path.home() / ".local" / "share"
@@ -292,12 +295,79 @@ class RuAccentBackend:
         return "".join(marked)
 
 
+def _load_extra(module: str):
+    """Импорт пакета из окружения приложения, если он там есть.
+
+    Приложение ставит то, чего нет в apt, в ~/.local/share/silero-tts-reader/venv
+    (см. ``extras``). Графическое приложение подмешивает это окружение в
+    launcher, а командная строка и модуль speech-dispatcher туда не заходят —
+    и без этой строки акцентор молча не находился бы именно там, где он нужен
+    для чтения книг. Подмешивание путей безопасно и повторяемо: повторный
+    вызов ничего не меняет.
+    """
+    from . import extras
+
+    extras.activate()
+    return __import__(module, fromlist=["_"])
+
+
+class SileroStressBackend:
+    """Разметка через Silero Stress — модель ударений и омографов от Silero.
+
+    Три отличия от ruaccent, важные на практике:
+
+    * покрытие около 4 млн словоформ плюс 2,2 тыс. омографов с F1 0,92;
+    * вес около 50 МБ и никаких зависимостей, кроме torch, который и так нужен
+      синтезу: ни transformers, ни onnxruntime;
+    * MIT и никакой сети — модели лежат внутри пакета.
+
+    Замер на наших фразах: согласен со всеми двенадцатью правками словаря и
+    решает три омографа, на которых словарь и ruaccent ошибаются («окн+а
+    плеера», «замк+и», при том что «в+ыходит» он путает с совершенным видом).
+    """
+
+    def __init__(self) -> None:
+        module = _load_extra("silero_stress")
+
+        self._accentor = module.load_accentor()
+
+    def mark(self, text: str, fallback=None) -> str:
+        """Разметить текст, переживая отказ модели.
+
+        Ударение на односложных не ставится: знак на них ничего не меняет, а
+        лишний «+» левее по тексту переключает модель синтеза, и омограф после
+        него читается неверно.
+        """
+        try:
+            return self._accentor(text, stress_single_vowel=False)
+        except Exception:
+            pass
+        parts = _SENTENCE_RE.split(text)
+        marked: list[str] = []
+        for part in parts:
+            # Знаки препинания и пробелы модели не нужны: она на них тратит
+            # вызов и ничего не возвращает.
+            if not _WORD_RE.search(part):
+                marked.append(part)
+                continue
+            try:
+                marked.append(self._accentor(part, stress_single_vowel=False))
+            except Exception:
+                marked.append(fallback(part) if fallback is not None else part)
+        return "".join(marked)
+
+
 class Accentor:
     """Расставляет ударения в тексте.
 
-    Два источника: словарь (всегда) и ruaccent (если установлен). Словарь
-    омографы не трогает — их различает акцентор модели; ruaccent размечает
-    всё, включая омографы, поэтому на нём частичная разметка не возникает.
+    Источники: словарь (всегда), а поверх него нейросетевой акцентор, если он
+    установлен, — Silero Stress или ruaccent. Словарь омографы не трогает: их
+    различает акцентор модели. Оба акцентора размечают текст целиком, поэтому
+    на них частичной разметки не возникает.
+
+    Silero Stress идёт первым в ``auto``: он легче (50 МБ против 160 МБ у
+    ruaccent) и не тянет transformers с onnxruntime — только torch, который
+    синтезу и так нужен.
     """
 
     def __init__(
@@ -314,6 +384,8 @@ class Accentor:
         self._ruaccent_models = ruaccent_models
         self._ruaccent: RuAccentBackend | None = None
         self._ruaccent_checked = False
+        self._silero: SileroStressBackend | None = None
+        self._silero_checked = False
         self.mode = mode if mode in MODES else MODE_OFF
         self._overrides = {
             _decode_stress(word).lower(): form
@@ -387,6 +459,13 @@ class Accentor:
         # а прямая подсказка из текста.
         text = convert_marks(text)
 
+        silero = self._silero_backend()
+        if silero is not None:
+            # Акцентор размечает всё по контексту, поэтому правки пользователя
+            # идут после него: свой словарь главнее любой модели.
+            marked = silero.mark(text, fallback=self._mark_with_dictionary)
+            return self._apply_overrides(_drop_redundant_marks(marked))
+
         ruaccent = self._ruaccent_backend()
         if ruaccent is not None:
             # ruaccent размечает всё по контексту, поэтому правки пользователя
@@ -409,9 +488,26 @@ class Accentor:
 
         return _WORD_RE.sub(replace, text)
 
+    def _silero_backend(self) -> SileroStressBackend | None:
+        """Silero Stress, если он запрошен и установлен. Иначе None."""
+        if self._source in (SOURCE_DICTIONARY, SOURCE_RUACCENT):
+            return None
+        if not self._silero_checked:
+            self._silero_checked = True
+            try:
+                self._silero = SileroStressBackend()
+            except Exception as exc:
+                if self._source == SOURCE_SILERO:
+                    # Выбор сделан явно: молчаливая подмена была бы обманом.
+                    # i18n: нет перевода — строка журнала в консоли
+                    print(f"  ✗ silero-stress не подключился: "
+                          f"{type(exc).__name__}: {exc}", flush=True)
+                self._silero = None
+        return self._silero
+
     def _ruaccent_backend(self) -> RuAccentBackend | None:
         """ruaccent, если он запрошен и доступен. Иначе None и словарь."""
-        if self._source == SOURCE_DICTIONARY:
+        if self._source in (SOURCE_DICTIONARY, SOURCE_SILERO):
             return None
         if not self._ruaccent_checked:
             self._ruaccent_checked = True
@@ -438,8 +534,12 @@ class Accentor:
 
     @property
     def source(self) -> str:
-        """Действующий источник: ``ruaccent`` или ``dictionary``."""
-        return "ruaccent" if self._ruaccent_backend() is not None else "dictionary"
+        """Действующий источник: ``silero-stress``, ``ruaccent`` или ``dictionary``."""
+        if self._silero_backend() is not None:
+            return SOURCE_SILERO
+        if self._ruaccent_backend() is not None:
+            return SOURCE_RUACCENT
+        return "dictionary"
 
     def ambiguous_words(self, text: str) -> list[str]:
         """Многозначные слова во фрагменте — для журнала, а не для пропуска.
