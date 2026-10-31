@@ -307,7 +307,8 @@ fi
 install -Dm644 "$READER_ROOT/usr/share/icons/silero-tts-reader.png" \
     "$READER_ROOT/usr/share/pixmaps/$READER.png"
 rm -f "$READER_ROOT/usr/share/icons/silero-tts-reader.png"
-find "$READER_ROOT/usr/share/icons" -name '*.png' -exec chmod 0644 {} +
+find "$READER_ROOT/usr/share/icons" \( -name '*.png' -o -name '*.svg' \) \
+    -exec chmod 0644 {} +
 
 # Кэш значков: без него тема может отдавать старый набор после обновления,
 # а новые имена (значки трея) не находиться вовсе.

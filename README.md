@@ -570,3 +570,10 @@ silero-tts-reader/
 ## 📜 Лицензия
 
 Проект распространяется под лицензией **MIT**. Подробности в файле [LICENSE](LICENSE).
+
+### Сторонняя графика
+
+Иконка и значок трея собраны из знака «text to speech» набора Material Design
+(источник: [icon-icons.com](https://icon-icons.com/icon/text-to-speech/135108)),
+лицензия **Apache License 2.0**. Исходные файлы знака и описание того, что из
+них генерируется, — в [packaging/assets/README.md](packaging/assets/README.md).
