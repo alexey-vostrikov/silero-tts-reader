@@ -85,23 +85,15 @@ check("свекла находится как свёкла",
 check("поселок находится как посёлок",
       dictionary.variants("поселок") == ("пос+ёлок",), str(dictionary.variants("поселок")))
 
-print("6. Омографы разрешаются морфологией, а не угадыванием")
-cases = [
-    ("ноги", "NOUN Animacy=Inan|Case=Gen|Gender=Fem|Number=Sing", "ног+и"),
-    ("ноги", "NOUN Animacy=Inan|Case=Nom|Gender=Fem|Number=Plur", "н+оги"),
-    ("полки", "NOUN Animacy=Inan|Case=Gen|Gender=Fem|Number=Sing", "п+олки"),
-    # «полки́» — множественное число от «полк» (полк, а не полка).
-    ("полки", "NOUN Animacy=Inan|Case=Nom|Gender=Masc|Number=Plur", "полк+и"),
-    ("начал", "VERB Aspect=Perf|Gender=Masc|Mood=Ind|Number=Sing|Tense=Past|VerbForm=Fin",
-     "н+ачал"),
-]
-for word, tag, expected in cases:
-    got = dictionary.resolve_homograph(word, [tag])
-    check(f"омограф {word} по разбору {tag.split()[1][:28]}…", got == expected, str(got))
-check("неразрешимый омограф не выдумывает ударение",
-      dictionary.resolve_homograph("замок", ["VERB X"]) is None)
-check("омограф без разбора не разрешается",
-      dictionary.resolve_homograph("ноги", []) is None)
+print("6. Словарь омографов виден, но не применяется")
+# Словарь омографов остаётся в данных: по нему можно понять, что слово
+# многозначно, и объяснить в журнале, почему пометки нет.
+check("«окна» известен как омограф",
+      bool(dictionary.homograph_variants("окна")),
+      str(list(dictionary.homograph_variants("окна"))[:2]))
+check("«звонит» омографом не считается",
+      not dictionary.homograph_variants("звонит"),
+      str(dictionary.homograph_variants("звонит")))
 
 print("7. Режим off ничего не меняет")
 off = Accentor(mode=MODE_OFF)
@@ -119,7 +111,7 @@ print("9. Режим dict: словарь, правки словаря и одн
 full = Accentor(mode=MODE_DICT, directory=DATA)
 for word, expected in (("каталог", "катал+ог"), ("километр", "килом+етр"),
                        ("жалюзи", "жалюз+и"), ("гражданство", "гр+ажданство"),
-                       ("двери", "дв+ери")):
+                       ("сантиметр", "сантим+етр")):
     got = full.accent_word(word)
     check(f"dict: {word}", got == expected, str(got))
 for word in ("он", "и", "в"):
@@ -194,13 +186,113 @@ for forbidden in ("import torch", "from torch", "silero_stress", "ruaccent",
                   "onnxruntime", "numpy"):
     check(f"нет зависимости «{forbidden}»", forbidden not in module_source)
 
-print("17. Правки к словарю корректны по форме")
+print("18. Омографы не разрешаются словарём вовсе")
+# Замер на модели показал: она различает омографы по контексту лучше, чем
+# словарь с одним вариантом. Поэтому словарь их не трогает — и заодно не
+# нужен pymorphy3, которого нет в архиве Ubuntu.
+check("в данных нет заранее разрешённых омографов",
+      not (DATA / "resolved.txt.xz").is_file())
+for word in ("окна", "письма", "ноги", "полки"):
+    check(f"«{word}» остаётся без пометки", full.accent_word(word) is None,
+          str(full.accent_word(word)))
+
+print("19. Омограф не помечается: решает акцентор модели")
+# Модель разрешает омографы по контексту сама (put_stress_homo), и делает это
+# лучше фиксированного словарного варианта. Замер на десяти контрастных фразах:
+# модель верна 7 раз, словарь с одним вариантом — 5. Пример из жизни:
+# «Окна выходят во двор» модель читает как и́менительный множественного, а
+# «Проверка окна плеера» — как родительный единственного. Один словарный
+# вариант на оба случая ошибается обязательно.
+# Ожидание: омограф остаётся без пометки, остальные слова помечены словарём.
+# «плеера» и «устали» в словаре отсутствуют либо тоже омографы — их тоже
+# отдаём модели, поэтому в ожидании они без пометки.
+context_cases = [
+    ("Окна выходят во двор.", "Окна выходят во двор."),
+    ("Проверка окна плеера.", "Пров+ерка окна плеера."),
+    ("Ноги устали от дороги.", "Ноги устали от дороги."),
+]
+for source, expected in context_cases:
+    got = full.accent_text(source)
+    check(f"{source!r}", got == expected, got)
+for word in ("окна", "ноги", "полки", "замок", "стоит"):
+    form, source = full.explain(word)
+    check(f"омограф «{word}» отдан модели",
+          form is None and "омограф" in source, f"{form} [{source}]")
+
+print("19а. Многозначные словоформы исключены из словаря")
+# «выходят» в источнике помечено как вы́ходят (вынянчат), хотя в тексте
+# почти всегда выхо́дят. Разные леммы дают разное ударение — словарь такое
+# не трогает.
+for word in ("выходят", "выходит", "выходить", "двери"):
+    got = full.accent_word(word)
+    check(f"«{word}» не помечается словарём", got is None, str(got))
+check("однозначное слово по-прежнему помечается",
+      full.accent_word("каталог") == "катал+ог", str(full.accent_word("каталог")))
+# «боду́н»: знак стоит ПЕРЕД ударной гласной, поэтому «бод+ун».
+check("«бодун» помечается верно", full.accent_word("бодун") == "бод+ун",
+      str(full.accent_word("бодун")))
+check("«бодуна» помечается верно", full.accent_word("бодуна") == "бодун+а",
+      str(full.accent_word("бодуна")))
+
+print("19б. Вид глагола задаёт смысл, а не форма слова")
+# «Выходить» — вы́ходить (совершенный, вынянчить) и выходи́ть (несовершенный,
+# идти). Морфология вид различает, но выбор зависит от фразы, поэтому обе
+# формы остаются без пометки, а решает акцентор модели.
+for word in ("выходить", "выходит", "выходят", "выходил"):
+    check(f"«{word}» не помечается", full.accent_word(word) is None,
+          str(full.accent_word(word)))
+for text in ("Мама обещала выходить его до выздоровления",
+             "Я буду выходить на работу каждый день"):
+    got = full.accent_text(text)
+    # Точная сверка: ни один из двух вариантов ударения не появился.
+    check("ни «в+ыходить», ни «выход+ить» в тексте нет",
+          "в+ыходить" not in got and "выход+ить" not in got, got)
+check("остальные слова во фразе помечены",
+      full.accent_text("Я буду выходить на работу каждый день").count("+") >= 3,
+      full.accent_text("Я буду выходить на работу каждый день"))
+
+print("19в. Омограф не помечается, даже если есть в словаре (защита кода)")
+# Проверка страхует КОД, а не данные. В рабочем словаре многозначные формы
+# выброшены при сборке, поэтому ветка «омограф» не пересекается с общим
+# словарём и мутация кода остаётся незамеченной. Здесь собираем синтетический
+# словарь, где омограф ЕСТЬ и в общем списке тоже, и требуем, чтобы пометки
+# всё равно не было.
+import tempfile  # noqa: E402
+
+with tempfile.TemporaryDirectory() as raw:
+    fake = Path(raw)
+    # Порядок строк — по слову без пометки, иначе двоичный поиск ничего не
+    # найдёт и проверка пройдёт при любом коде. «выходить» < «выходят» (и < я).
+    fake_forms = sorted(
+        ["в+ыходят", "выход+ить", "катал+ог"],
+        key=lambda form: (form.replace("+", ""), form))
+    (fake / "forms.txt.xz").write_bytes(lzma.compress(
+        ("\n".join(fake_forms) + "\n").encode("utf-8")))
+    (fake / "homographs.json.xz").write_bytes(lzma.compress(
+        json.dumps({"выходят": {"1": "в+ыходят", "2": "выход+ят"},
+                    "выходить": {"1": "в+ыходить"}},
+                   ensure_ascii=False).encode("utf-8")))
+    fake_accentor = Accentor(mode=MODE_DICT, directory=fake)
+
+    form, source = fake_accentor.explain("выходят")
+    check("омограф не помечен, хотя есть в словаре",
+          form is None, f"{form} [{source}]")
+    check("источник назван честно", "омограф" in source, source)
+    check("текст остаётся без пометки",
+          fake_accentor.accent_text("Они выходят во двор.") == "Они выходят во двор.",
+          fake_accentor.accent_text("Они выходят во двор."))
+    check("однозначное слово из того же словаря помечено",
+          fake_accentor.accent_word("каталог") == "катал+ог",
+          str(fake_accentor.accent_word("каталог")))
+
+print("20. Правки к словарю корректны по форме")
 corrections = json.loads((DATA / "corrections.json").read_text(encoding="utf-8"))
-bad = [word for word, form in corrections.items()
-       if not word.startswith("_")
-       and (not has_valid_stress(form) or form.replace("+", "").lower() != word.lower())]
+plain = {word: form for word, form in corrections.items()
+         if isinstance(form, str) and not word.startswith("_")}
+bad = [word for word, form in plain.items()
+       if not has_valid_stress(form) or form.replace("+", "").lower() != word.lower()]
 check("ключ совпадает с формой и пометка одна", not bad, str(bad[:4]))
-check("правок не меньше десяти", len(corrections) >= 11, f"{len(corrections) - 1}")
+check("правок не меньше десяти", len(plain) >= 11, f"{len(plain)}")
 
 print(f"\nИТОГ: успешно {checks - failures}, провалено {failures}")
 sys.exit(1 if failures else 0)

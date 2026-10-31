@@ -45,43 +45,6 @@ MODES = (MODE_OFF, MODE_USER, MODE_DICT)
 _WORD_RE = re.compile(r"[А-Яа-яЁё]+")
 _VOWELS = set("аеёиоуыэюяАЕЁИОУЫЭЮЯ")
 
-# Признаки pymorphy3 -> имена граммем в словаре омографов.
-# Ключи словаря записаны в алфавитном порядке признаков, поэтому при сборке
-# тега признаки сортируются: иначе строка не совпадёт с ключом.
-_GRAMMEMES = {
-    "anim": "Animacy=Anim",
-    "inan": "Animacy=Inan",
-    "perf": "Aspect=Perf",
-    "impf": "Aspect=Imp",
-    "nomn": "Case=Nom",
-    "gent": "Case=Gen",
-    "datv": "Case=Dat",
-    "accs": "Case=Acc",
-    "ablt": "Case=Ins",
-    "loct": "Case=Loc",
-    "voct": "Case=Voc",
-    "masc": "Gender=Masc",
-    "femn": "Gender=Fem",
-    "neut": "Gender=Neut",
-    "ms-f": "Gender=Masc",
-    "indc": "Mood=Ind",
-    "impr": "Mood=Imp",
-    "sing": "Number=Sing",
-    "plur": "Number=Plur",
-    "1per": "Person=1",
-    "2per": "Person=2",
-    "3per": "Person=3",
-    "pres": "Tense=Pres",
-    "past": "Tense=Past",
-    "futr": "Tense=Fut",
-    "brev": "Variant=Brev",
-    "fin": "VerbForm=Fin",
-    "infn": "VerbForm=Inf",
-    "partcp": "VerbForm=Part",
-    "ger": "VerbForm=Ger",
-}
-
-
 def data_dir() -> Path:
     """Каталог со словарными данными: рядом с пакетом или в установленном виде."""
     here = Path(__file__).resolve().parent.parent / "assets" / "stress"
@@ -220,49 +183,12 @@ class StressDictionary:
         assert self._homographs is not None
         return self._homographs.get(word.lower(), {})
 
-    def tag_for(self, parse) -> str:
-        """Разбор pymorphy3 в строку того вида, что в словаре омографов.
-
-        Вид: ``NOUN Animacy=Inan|Case=Gen|Gender=Fem|Number=Sing``. Признаки
-        отсортированы — так записаны ключи в словаре.
-        """
-        names = set(parse.tag.grammemes)
-        grammemes = sorted(
-            _GRAMMEMES[name] for name in names if name in _GRAMMEMES
-        )
-        # У pymorphy личные формы прошедшего времени не помечены как конечные
-        # (нет «fin»), а словарь омографов такие формы различает. Восстанавливаем
-        # признак сами: наклонение есть, а инфинитива, причастия и деепричастия
-        # нет — значит, форма конечная.
-        if (parse.tag.POS == "VERB"
-                and ("indc" in names or "impr" in names)
-                and not names & {"infn", "partcp", "ger"}):
-            grammemes = sorted(set(grammemes) | {"VerbForm=Fin"})
-        part_of_speech = parse.tag.POS or "X"
-        return f"{part_of_speech} {'|'.join(grammemes)}" if grammemes else part_of_speech
-
-    def resolve_homograph(self, word: str, tags: list[str]) -> str | None:
-        """Выбрать ударение омографа по готовым разборам.
-
-        Если ни один разбор не совпал с ключами словаря, возвращается ``None``:
-        значит, различить варианты нечем, и решать должна модель.
-        """
-        entries = self.homograph_variants(word)
-        if not entries:
-            return None
-        for tag in tags:
-            form = entries.get(tag)
-            if form:
-                return form
-        return None
-
 
 class Accentor:
     """Расставляет ударения в тексте по словарю.
 
-    Порядок источников задан в описании модуля. Разбор слова берётся из
-    pymorphy3, если он установлен; без него омографы не разрешаются, и это
-    видно в журнале, а не замалчивается.
+    Омографы словарь не трогает: их различает акцентор модели по контексту,
+    и на замере он вернее фиксированного словарного варианта.
     """
 
     def __init__(
@@ -280,32 +206,9 @@ class Accentor:
         }
         self._corrections = load_corrections(self._data_dir())
         self._dictionary = dictionary or StressDictionary(self._data_dir())
-        self._morphology = None
-        self._morphology_checked = False
 
     def _data_dir(self) -> Path:
         return self._directory or data_dir()
-
-    # ── Морфология ───────────────────────────────────────────────────────────
-
-    def _parses(self, word: str) -> list[str]:
-        """Разборы слова в формате словаря омографов, пустой список без pymorphy."""
-        if not self._morphology_checked:
-            self._morphology_checked = True
-            try:
-                import pymorphy3
-            except ImportError:
-                self._morphology = None
-            else:
-                self._morphology = pymorphy3.MorphAnalyzer()
-        if self._morphology is None:
-            return []
-        return [self._dictionary.tag_for(p) for p in self._morphology.parse(word)]
-
-    @property
-    def morphology_available(self) -> bool:
-        self._parses("проверка")
-        return self._morphology is not None
 
     # ── Одно слово ───────────────────────────────────────────────────────────
 
@@ -331,11 +234,12 @@ class Accentor:
             return fixed, "правка словаря"
 
         if self._dictionary.homograph_variants(lowered):
-            resolved = self._dictionary.resolve_homograph(lowered, self._parses(lowered))
-            if resolved:
-                return resolved, "омограф"
-            # Омограф, но разрешить нечем — пусть решает модель.
-            return None, "омограф неразрешён"
+            # Омограф: решает акцентор модели, а не словарь. У модели есть
+            # разбор по контексту (put_stress_homo), и на замере из десяти
+            # контрастных фраз она верна 7 раз против 5 у словаря с одним
+            # фиксированным вариантом. Словарная пометка перебила бы её выбор:
+            # «Окна выходят во двор» получило бы «Окн+а».
+            return None, "омограф: решает модель"
 
         variants = self._dictionary.variants(lowered)
         if len(variants) == 1:

@@ -38,6 +38,84 @@ TARGET = ROOT / "silero_tts_reader" / "assets" / "stress"
 VOWELS = set("аеёиоуыэюя")
 
 
+def form_to_before_vowel(form: str) -> str | None:
+    """Переставить знак в форму «перед гласной», отбросив побочное ударение.
+
+    В All_Forms_UTF8.txt ударение помечено апострофом после гласной, побочное —
+    обратным апострофом. Здесь тот же перевод в нотацию Silero, что и у
+    плоского списка, чтобы варианты можно было сравнивать между собой.
+
+    У слов с «ё» апострофа нет вовсе: ё всегда ударная, и источник её не
+    помечает (свёкла, посёлок). Без этой ветки все такие словоформы терялись.
+    """
+    plain = form.replace("`", "")
+    if plain.count("'") == 1:
+        stressed = plain.index("'") - 1
+    elif plain.count("'") == 0 and "ё" in plain:
+        stressed = plain.index("ё")
+    else:
+        return None
+    letters = plain.replace("'", "")
+    if stressed < 0 or letters[stressed] not in VOWELS:
+        return None
+    return "".join(("+" if index == stressed else "") + letter
+                   for index, letter in enumerate(letters))
+
+
+def collect_forms(source: Path) -> tuple[set[str], set[str]]:
+    """Словоформы, у которых в разных леммах источника разное ударение.
+
+    Плоский список Accents.json хранит один вариант на словоформу и для
+    многозначных слов выбирает его произвольно: «выходят» помечено как
+    «в+ыходят» (вы́ходят — вынянчат), хотя в тексте почти всегда «выхо́дят».
+    Определить по самому плоскому списку, что вариант не единственный, нельзя.
+
+    All_Forms_UTF8.txt перечисляет формы по леммам, и та же словоформа может
+    встретиться дважды с разным ударением: «выходить» — вы́ходить (совершенный
+    вид, вынянчить) и выходи́ть (несовершенный, идти). Вид и переходность
+    различимы морфологически, и леммы привязываются к разборам по набору форм
+    (у совершенного есть причастия «выхожен», «выхоженная»).
+
+    Но разбор — не выбор: нужный вид задаёт смысл предложения, а не форма
+    слова, и pymorphy3 вне фразы отдаёт несовершенный вид с весом 0.80.
+    Проверка на фразах («Мама обещала вы́ходить его» против «Я буду выходи́ть
+    на работу») дала 4 верных из 4 у акцентора модели и половину ошибок у
+    выбора по весу разбора. Поэтому такие словоформы в словарь не попадают и
+    решает модель, у которой есть контекст.
+
+    Словарь собирается именно из этого файла, а не из плоского списка
+    Accents.json: плоский список местами просто неверен. «Бодун» в нём помечен
+    как «боду+н» (бо́дун), тогда как лемменный файл даёт «боду'н» (боду́н), и
+    вторая форма — норма. Проверять такое по плоскому списку нечем, а по
+    леммам видно и правильную форму, и многозначность.
+
+    Возвращает (словоформы, многозначные): первое — то, что можно помечать,
+    второе — то, что отдаётся модели.
+    """
+    variants: dict[str, set[str]] = {}
+    path = source / "russian_g2p" / "data" / "All_Forms_UTF8.txt"
+    if not path.is_file():
+        print(f"  ⚠ нет {path.name}: многозначные словоформы не выявлены",
+              file=sys.stderr)
+        return set()
+    with path.open(encoding="utf-8", errors="ignore") as handle:
+        for line in handle:
+            _, _, forms = line.partition("#")
+            for form in forms.strip().split(","):
+                fixed = form_to_before_vowel(form)
+                if fixed is None:
+                    continue
+                variants.setdefault(fixed.replace("+", ""), set()).add(fixed)
+    ambiguous = {word for word, found in variants.items() if len(found) > 1}
+    forms = {next(iter(found)) for word, found in variants.items()
+             if len(found) == 1}
+    print(f"  ✓ словоформ в лемменном файле: {len(variants):,}, "
+          f"однозначных: {len(forms):,}, многозначных: {len(ambiguous):,}")
+    if not forms:
+        print(f"  ✗ {path.name} не дал ни одной словоформы", file=sys.stderr)
+    return forms, ambiguous
+
+
 def to_before_vowel(form: str) -> str | None:
     """Переставить знак из позиции «после гласной» в «перед гласной».
 
@@ -98,23 +176,23 @@ def main() -> int:
             print(f"  ✗ нет файла: {path}", file=sys.stderr)
             return 1
 
-    with accents_path.open(encoding="utf-8", errors="ignore") as handle:
-        parts = json.load(handle)
-    # Часть 1 — омографы с разборами, часть 2 — плоский список ударённых форм.
-    flat = parts[1]
 
-    forms: set[str] = set()
-    dropped = 0
-    for form in flat:
-        if not form:
-            continue
-        fixed = to_before_vowel(form)
-        if fixed is None:
-            # Неверная разметка: лучше не ставить ничего, чем поставить
-            # неверно — модель умеет угадывать сама, но не спорит с меткой.
-            dropped += 1
-            continue
-        forms.add(fixed)
+    forms, ambiguous = collect_forms(args.source)
+
+    # Правка на многозначное слово выбирала бы один вариант за весь текст —
+    # та же ошибка, что и у словарной пометки. Такие правки не пропускаем.
+    corrections_path = TARGET / "corrections.json"
+    if corrections_path.is_file():
+        raw_corrections = json.loads(corrections_path.read_text(encoding="utf-8"))
+        bad = sorted(word for word in raw_corrections
+                     if not word.startswith("_")
+                     and word.lower().replace("ё", "е") in ambiguous)
+        if bad:
+            print(f"  ✗ правки касаются многозначных слов: {bad}", file=sys.stderr)
+            print("    уберите их: ударение таких слов определяет модель по "
+                  "контексту", file=sys.stderr)
+            return 1
+
 
     ordered = sorted(forms, key=lambda form: (form.replace("+", ""), form))
     blob = "\n".join(ordered) + "\n"
@@ -137,9 +215,8 @@ def main() -> int:
     with_tags = sum(1 for variants in homographs.values()
                     if all(tag[:1].isalpha() for tag in variants))
 
-    print(f"  ✓ словоформ: {len(ordered):,}")
-    if dropped:
-        print(f"  — пропущено словоформ с негодной разметкой: {dropped:,}")
+    print(f"  ✓ словоформ в словаре: {len(ordered):,} "
+          f"(многозначные исключены: {len(ambiguous):,})")
     print(f"  ✓ омографов: {len(homographs):,}, из них с разбором: {with_tags:,}")
     if homograph_dropped:
         print(f"  — пропущено записей омографов: {homograph_dropped:,}")
