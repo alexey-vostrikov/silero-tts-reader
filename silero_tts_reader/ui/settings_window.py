@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 
 import gi
@@ -14,10 +15,11 @@ import gi
 gi.require_version("Gdk", "4.0")
 gi.require_version("Gtk", "4.0")
 
-from gi.repository import Gdk, Gtk  # noqa: E402
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 from .. import i18n  # noqa: E402
 from ..config.config_manager import ConfigManager  # noqa: E402
+from ..core import extras  # noqa: E402
 from ..core.audio_player import SPEED_AVAILABLE  # noqa: E402
 from ..core.hotkey_listener import HotkeyListener  # noqa: E402
 from ..core.text_processor import TextProcessor  # noqa: E402
@@ -687,26 +689,39 @@ class SettingsWindow(Gtk.Dialog):
         source_row.append(self._label(_("Источник ударений:")))
         self._stress_source_combo = Gtk.ComboBoxText()
         for value, title in (
-            ("auto", _("ruaccent, если установлен")),
-            ("dictionary", _("Только словарь")),
+            ("auto", _("Silero Stress, затем ruaccent")),
+            ("silero-stress", _("Только Silero Stress")),
             ("ruaccent", _("Только ruaccent")),
+            ("dictionary", _("Только словарь")),
         ):
             self._stress_source_combo.append(value, title)
         self._stress_source_combo.set_active_id(self._config.stress_source)
         self._stress_source_combo.connect(
             "changed",
-            lambda combo: self._pending.update(
-                {"stress_source": combo.get_active_id() or "auto"}
-            ),
+            lambda combo: self._on_source_changed(combo),
         )
         source_row.append(self._stress_source_combo)
+
+        # Кнопка нужна потому, что пакета в apt нет: пользователь выбирает
+        # источник и тут же узнаёт, что за него надо скачать 65 МБ. Установка
+        # идёт в отдельное окружение, root не требуется.
+        self._install_extra_btn = Gtk.Button(label=_("Установить…"))
+        self._install_extra_btn.connect("clicked", self._on_install_extra)
+        source_row.append(self._install_extra_btn)
+
+        self._extra_status = self._label("")
+        source_row.append(self._extra_status)
         source_row.set_tooltip_text(_(
-            "ruaccent размечает все слова по контексту и решает омографы "
-            "(«окна» и «окна́»), но требует отдельной установки и 160 МБ "
-            "моделей. Словарь работает всегда, однако омографы оставляет "
-            "акцентору модели."
+            "Silero Stress и ruaccent размечают все слова по контексту и "
+            "решают омографы («окна» и «окна́»), но ставятся отдельно: "
+            "первый занимает 50 МБ и довольствуется torch, второй — 160 МБ "
+            "и тянет onnxruntime с transformers. Словарь работает всегда, "
+            "однако омографы оставляет акцентору модели."
         ))
         speech_box.append(source_row)
+        # Состояние кнопки — сразу, не дожидаясь смены источника: иначе при
+        # открытии окна видно кнопку «Установить…» даже когда всё уже стоит.
+        self._refresh_extra_state()
 
         abbrev_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         abbrev_row.append(self._label(_("Сокращения:")))
@@ -1257,6 +1272,75 @@ class SettingsWindow(Gtk.Dialog):
             self._on_reset()
         else:
             self.destroy()
+
+    # ── Дополнительные пакеты ────────────────────────────────────────────────
+
+    def _on_source_changed(self, combo) -> None:
+        value = combo.get_active_id() or "auto"
+        self._pending.update({"stress_source": value})
+        self._refresh_extra_state()
+
+    def _extra_key_for_source(self) -> str | None:
+        """Ключ пакета, без которого выбранный источник бесполезен."""
+        value = self._stress_source_combo.get_active_id() or "auto"
+        if value == "silero-stress":
+            return "stress"
+        if value == "ruaccent":
+            return "ruaccent"
+        if value == "auto":
+            # auto переживёт отсутствие обоих: останется словарь. Но если нет
+            # ни одного, об этом честнее сказать, чем молчать.
+            return None if extras.installed_keys() else "stress"
+        return None
+
+    def _refresh_extra_state(self) -> None:
+        """Показать, установлен ли пакет для выбранного источника."""
+        key = self._extra_key_for_source()
+        if key is None:
+            self._install_extra_btn.set_visible(False)
+            self._extra_status.set_text("")
+            return
+        extra = extras.EXTRAS[key]
+        installed = extras.is_installed(extra)
+        self._install_extra_btn.set_visible(not installed)
+        self._extra_status.set_text(
+            "" if installed
+            else _("нет: ~{size} МБ").format(size=extra.size_mb))
+
+    def _on_install_extra(self, _button) -> None:
+        """Поставить пакет в фоновом потоке: pip идёт минутами."""
+        key = self._extra_key_for_source()
+        if key is None:
+            return
+        extra = extras.EXTRAS[key]
+        self._install_extra_btn.set_sensitive(False)
+        self._extra_status.set_text(
+            _("ставлю ~{size} МБ…").format(size=extra.size_mb))
+
+        def worker() -> None:
+            lines: list[str] = []
+            try:
+                code = extras.install([key], echo=lines.append)
+            except (RuntimeError, ValueError) as exc:
+                GLib.idle_add(self._extra_done, key, 1, str(exc))
+                return
+            GLib.idle_add(self._extra_done, key, code,
+                          lines[-1] if lines else "")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _extra_done(self, key: str, code: int, detail: str) -> bool:
+        """Итог установки в главном потоке: кнопку и подпись — по факту."""
+        self._install_extra_btn.set_sensitive(True)
+        extra = extras.EXTRAS[key]
+        if code == 0 and extras.is_installed(extra):
+            self._extra_status.set_text(
+                _("{title}: установлен").format(title=extra.title))
+            self._install_extra_btn.set_visible(False)
+        else:
+            self._extra_status.set_text(
+                _("не удалось: {detail}").format(detail=detail or code))
+        return False   # событие одноразовое
 
     def _on_save(self) -> None:
         # Горячие клавиши читаем прямо из полей — в pending они попадают только при захвате

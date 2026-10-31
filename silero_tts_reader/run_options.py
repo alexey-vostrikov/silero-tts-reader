@@ -26,6 +26,10 @@ LOG_LEVEL_FLAG = "--log-level"
 DEBUG_FLAG = "--debug"
 HELP_FLAGS = ("--help", "-h")
 VERSION_FLAGS = ("--version", "-V")
+# Ключи окружения: сами по себе не запускают приложение, а печатают состояние
+# или ставят пакеты. Поэтому обрабатываются до Gtk и завершают работу.
+LIST_EXTRAS_FLAG = "--list-extras"
+INSTALL_EXTRAS_FLAG = "--install-extras"
 
 
 def help_text(program: str = "silero-tts-reader", version: str = "") -> str:
@@ -55,10 +59,17 @@ def help_text(program: str = "silero-tts-reader", version: str = "") -> str:
       --log-level УРОВЕНЬ  quiet | normal | detail | debug
       --debug             то же, что --log-level debug
 
+Дополнительные пакеты (в apt их нет, ставятся в отдельное окружение
+~/.local/share/silero-tts-reader/venv, root не нужен):
+      --list-extras       что доступно и что уже стоит
+      --install-extras [КЛЮЧ…]
+                          поставить; без ключей — silero-stress
+
 Примеры:
   {program} книга.fb2 --max-time 120     # две минуты и стоп
   {program} книга.fb2 --exit-after-play  # выйти после прочтения
   {program} глава.txt --debug            # подробный журнал в консоль
+  {program} --install-extras             # поставить Silero Stress
 
 Журнал печатается в консоль, из которой запущено приложение: в systemd-сессии
 сообщения оболочки в journald не попадают. Уровень по умолчанию — normal; его
@@ -95,6 +106,28 @@ class RunOptions:
             parts.append(f"журнал {self.log_level}")
         # i18n: нет перевода — строка журнала в консоли
         return "Отладка: " + ", ".join(parts) if parts else ""
+
+
+def parse_extras_command(argv: list[str]) -> tuple[str, list[str]] | None:
+    """Команда окружения: ``--list-extras`` или ``--install-extras [ключи]``.
+
+    Возвращает ``(команда, ключи)`` или ``None``, если таких ключей нет.
+    Ключи берутся только сразу после флага: ``--install-extras stress
+    ruaccent``. Имена проверяются по списку в ``core.extras``, чтобы опечатка
+    не превращалась в попытку поставить несуществующий пакет.
+    """
+    args = list(argv[1:])
+    if LIST_EXTRAS_FLAG in args:
+        return LIST_EXTRAS_FLAG, []
+    if INSTALL_EXTRAS_FLAG not in args:
+        return None
+    index = args.index(INSTALL_EXTRAS_FLAG)
+    keys: list[str] = []
+    for arg in args[index + 1:]:
+        if arg.startswith("-"):
+            break
+        keys.append(arg)
+    return INSTALL_EXTRAS_FLAG, keys
 
 
 class OptionError(ValueError):

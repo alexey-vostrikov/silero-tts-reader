@@ -61,30 +61,50 @@ def _ensure_layer_shell_preload() -> None:
 
 
 def _activate_venv() -> None:
-    """If a .venv exists next to this script, prepend its site-packages to sys.path."""
+    """Подмешать пакеты окружений к текущему процессу.
+
+    Источников два, и оба необязательны:
+
+    * ``.venv`` рядом со скриптом — окружение из ``install.sh``, когда
+      приложение запущено из исходников;
+    * ``~/.local/share/silero-tts-reader/venv`` — окружение, куда приложение
+      ставит то, чего нет в apt (см. ``core/extras.py``). Оно нужно и для
+      установленного из deb варианта, где каталог приложения принадлежит root.
+
+    Порядок важен: локальное окружение из исходников ближе к разработке и
+    подмешивается последним, то есть оказывается первым в ``sys.path``.
+    """
     script_dir = Path(__file__).parent.resolve()
-    venv_dir = script_dir / ".venv"
+    candidates = [extras_venv_dir(), script_dir / ".venv"]
 
-    if not venv_dir.exists():
-        return
+    for venv in candidates:
+        if venv is None or not venv.exists() or sys.prefix == str(venv):
+            continue
+        packages = _site_packages_for(venv)
+        if packages is None:
+            continue
+        path = str(packages)
+        if path not in sys.path:
+            sys.path.insert(0, path)
+        os.environ.setdefault("VIRTUAL_ENV", str(venv))
 
-    if sys.prefix == str(venv_dir):
-        return
 
-    lib_dir = venv_dir / "lib"
-    if not lib_dir.exists():
-        return
+def extras_venv_dir() -> Path | None:
+    """Окружение приложения для пакетов, которых нет в apt.
 
-    site_packages = sorted(lib_dir.glob("python*/site-packages"))
-    if not site_packages:
-        return
+    Считается здесь, а не импортом из ``core.extras``: launcher подмешивает
+    пути ДО того, как пакет приложения станет импортируемым, — иначе
+    дополнительные пакеты не были бы видны самому же модулю extras.
+    """
+    base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    return base / "silero-tts-reader" / "venv"
 
-    for sp in site_packages:
-        sp_str = str(sp)
-        if sp_str not in sys.path:
-            sys.path.insert(0, sp_str)
 
-    os.environ.setdefault("VIRTUAL_ENV", str(venv_dir))
+def _site_packages_for(venv: Path) -> Path | None:
+    """Каталог site-packages окружения именно для этого интерпретатора."""
+    wanted = venv / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}"
+    packages = wanted / "site-packages"
+    return packages if packages.is_dir() else None
 
 
 def _suppress_noise() -> None:
@@ -115,10 +135,9 @@ def _suppress_noise() -> None:
             sys.stderr = _XlibFilter(sys.stderr.buffer, line_buffering=True)
 
 
+sys.path.insert(0, str(Path(__file__).parent.resolve()))
 _activate_venv()
 _suppress_noise()
-
-sys.path.insert(0, str(Path(__file__).parent.resolve()))
 
 from silero_tts_reader.__main__ import main  # noqa: E402
 
