@@ -110,8 +110,16 @@ jobs:
           dbus-run-session -- python3 tests/test_sni_tray.py
           # Значок лотка: вариант штриха под панель и состояние воспроизведения
           python3 tests/test_tray_icons.py
+          # Позиционирование окна: по умолчанию выключено, способ из настроек
+          xvfb-run -a python3 tests/test_positioning.py
+          # Ключи отладки: --max-time и --exit-after-play
+          xvfb-run -a python3 tests/test_run_options.py
           # Значок окна: согласие app-id с .desktop и установка иконки
           xvfb-run -a python3 tests/test_window_icon.py
+          # CSS: правила одного окна не красят другое
+          python3 tests/test_css_scope.py
+          # Диалоги: показ без run(), ссылка держится, папка как Gio.File
+          xvfb-run -a python3 tests/test_dialogs.py
           # Локализация: каталог свежий, все строки переведены, ни одна не забыта
           python3 packaging/i18n-build.py
           python3 packaging/i18n-audit.py

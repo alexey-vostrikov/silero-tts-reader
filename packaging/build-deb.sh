@@ -149,8 +149,11 @@ COMMON_ROOT="$(root_of "$COMMON")"
 install -d "$COMMON_ROOT/DEBIAN" \
     "$COMMON_ROOT$APP_ROOT/silero_tts_reader" \
     "$COMMON_ROOT/usr/bin"
+# log.py и run_options.py — общие: их импортируют и движок, и приложение.
+# Без них установка в чистой системе падала на "cannot import name 'log'".
 cp -a silero_tts_reader/__init__.py silero_tts_reader/i18n.py \
     silero_tts_reader/build_info.py silero_tts_reader/instance.py \
+    silero_tts_reader/log.py silero_tts_reader/run_options.py \
     silero_tts_reader/models.py silero_tts_reader/config silero_tts_reader/core \
     "$COMMON_ROOT$APP_ROOT/silero_tts_reader/"
 find "$COMMON_ROOT$APP_ROOT" -name '__pycache__' -type d -prune -exec rm -rf {} +
@@ -328,6 +331,13 @@ sed -e 's|^ExecStart=.*|ExecStart=/usr/bin/silero-tts-reader|' \
     silero-tts-reader.service > "$READER_ROOT/usr/lib/systemd/user/$READER.service"
 chmod 0644 "$READER_ROOT/usr/lib/systemd/user/$READER.service"
 
+# Man-страницы: в пакете они лежат сжатыми (так их ставит dh_installman, и
+# так их ждёт man-db).
+install -d "$READER_ROOT/usr/share/man/man1"
+gzip -9n -c packaging/man/silero-tts-reader.1 \
+    > "$READER_ROOT/usr/share/man/man1/silero-tts-reader.1.gz"
+chmod 0644 "$READER_ROOT/usr/share/man/man1/silero-tts-reader.1.gz"
+
 add_docs "$READER_ROOT" "$READER"
 gzip -9n < README.md > "$READER_ROOT/usr/share/doc/$READER/README.md.gz"
 chmod 0644 "$READER_ROOT/usr/share/doc/$READER/README.md.gz"
@@ -367,6 +377,10 @@ SPEAKER_BIN
 chmod 0755 "$SPEAKER_ROOT/usr/bin/silero-tts-speak"
 
 install -m755 packaging/speechd/silero-tts-speechd "$SPEAKER_ROOT/usr/bin/silero-tts-speechd"
+install -d "$SPEAKER_ROOT/usr/share/man/man1"
+gzip -9n -c packaging/man/silero-tts-speak.1 \
+    > "$SPEAKER_ROOT/usr/share/man/man1/silero-tts-speak.1.gz"
+chmod 0644 "$SPEAKER_ROOT/usr/share/man/man1/silero-tts-speak.1.gz"
 add_docs "$SPEAKER_ROOT" "$SPEAKER"
 install -m644 packaging/speechd/README.silero-tts-speechd \
     "$SPEAKER_ROOT/usr/share/doc/$SPEAKER/README.Debian"
@@ -414,6 +428,19 @@ Description: Silero TTS output module configuration for speech-dispatcher
  and synthesis is done by silero-tts-speak from the silero-tts-speechd package.
  Enable it with "sudo silero-tts-speechd enable".
 CONTROL
+
+# Каждый модуль исходного дерева обязан попасть хоть в один пакет: забытый
+# файл проявляется только на чистой установке, импортом "cannot import name".
+missing=0
+for module in silero_tts_reader/*.py; do
+    name="$(basename "$module")"
+    if ! find "$BUILD" -path "*/silero_tts_reader/$name" -print -quit | grep -q .; then
+        echo "  ✗ модуль не попал в пакеты: $name" >&2
+        missing=1
+    fi
+done
+[ "$missing" -eq 0 ] || { echo "сборка неполная" >&2; exit 1; }
+echo "  ✓ все модули из silero_tts_reader/ вошли в пакеты"
 
 [[ "$KEEP" == "1" ]] || rm -rf "$BUILD"
 
