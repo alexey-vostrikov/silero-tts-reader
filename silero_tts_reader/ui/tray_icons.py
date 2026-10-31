@@ -9,8 +9,8 @@
 * ``-tray-dark``  — тёмный штрих, для светлой панели.
 
 Вариант выбирается по системной теме (``auto``) или задаётся в настройках.
-К имени добавляется состояние воспроизведения: ``-wave`` (читает) и
-``-pause`` (пауза), чтобы значок говорил о состоянии без открытия окна.
+Состояния воспроизведения значком не показываются: в панели значок живёт в
+16–24 px, и знак паузы там не отличить от знака чтения.
 """
 from __future__ import annotations
 
@@ -23,13 +23,6 @@ gi.require_version("Gio", "2.0")
 from gi.repository import Gio  # noqa: E402
 
 ICON_NAME = "silero-tts-reader"
-
-# Состояние → суффикс имени файла. Пустой суффикс — покой.
-STATE_SUFFIX = {
-    "idle": "",
-    "playing": "-wave",
-    "paused": "-pause",
-}
 
 # Значения настройки «значок в трее».
 PREFER_AUTO = "auto"
@@ -90,21 +83,20 @@ def system_is_dark() -> bool:
     return "dark" in _theme_name().lower()
 
 
-def icon_name(state: str = "idle", prefer: str = PREFER_AUTO) -> str:
-    """Имя значка трея для состояния и выбранного варианта цвета.
+def icon_name(prefer: str = PREFER_AUTO) -> str:
+    """Имя значка трея для выбранного варианта цвета.
 
     ``prefer`` — значение настройки: ``auto`` смотрит на системную тему,
     ``light``/``dark`` задают цвет штриха явно (панель бывает не системная,
     например тёмная панель на светлом рабочем столе).
     """
-    suffix = STATE_SUFFIX.get(state, "")
     if prefer == PREFER_LIGHT:
         variant = "light"
     elif prefer == PREFER_DARK:
         variant = "dark"
     else:
         variant = "light" if system_is_dark() else "dark"
-    return f"{ICON_NAME}-tray-{variant}{suffix}"
+    return f"{ICON_NAME}-tray-{variant}"
 
 
 def icon_file(name: str, size: int = 32) -> str:

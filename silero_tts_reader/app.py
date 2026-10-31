@@ -133,7 +133,7 @@ class Application(Gtk.Application):
         # Значок трея — отдельный монохромный рисунок: цветная иконка приложения
         # на тёмной панели выглядит ярким пятном, на светлой — тёмным.
         self._tray = StatusNotifierTray(
-            icon_name=tray_icon_name("idle", self._config.tray_icon),
+            icon_name=tray_icon_name(self._config.tray_icon),
             title=APP_NAME,
             on_activate=self._show_window,
         )
@@ -504,14 +504,13 @@ class Application(Gtk.Application):
         self._worker.start()
         self._player.start()
 
-    def _set_tray_state(self, state: str) -> None:
-        """Показать состояние воспроизведения значком трея."""
+    def _refresh_tray_icon(self) -> None:
+        """Переставить значок после смены варианта цвета в настройках."""
         if self._tray is None:
             return
-        self._tray.set_icon_name(tray_icon_name(state, self._config.tray_icon))
+        self._tray.set_icon_name(tray_icon_name(self._config.tray_icon))
 
     def _on_playback_started(self) -> None:
-        self._set_tray_state("playing")
         if self._widget is None:
             return
         # Окно уже показано в _begin_pipeline: повторный fade_in переставлял
@@ -523,13 +522,11 @@ class Application(Gtk.Application):
             self._widget.set_progress(value)
 
     def _on_playback_finished(self) -> None:
-        self._set_tray_state("idle")
         if self._widget is not None:
             self._widget.set_paused(False)
             self._widget.schedule_hide(2000)
 
     def _on_playback_stopped(self) -> None:
-        self._set_tray_state("idle")
         if self._widget is not None:
             self._widget.schedule_hide(500)
 
@@ -542,12 +539,10 @@ class Application(Gtk.Application):
             self._player.join(timeout=1.0)
 
     def _on_playback_paused(self) -> None:
-        self._set_tray_state("paused")
         if self._widget is not None:
             self._widget.set_paused(True)
 
     def _on_playback_resumed(self) -> None:
-        self._set_tray_state("playing")
         if self._widget is not None:
             self._widget.set_paused(False)
 
@@ -622,7 +617,6 @@ class Application(Gtk.Application):
         self._update_widget_theme()
         self._register_hotkeys()
         # Значок трея мог сменить вариант цвета: переставляем без перезапуска.
-        self._set_tray_state("idle")
         if self._widget is not None:
             self._widget.set_speed(self._config.speed)
 

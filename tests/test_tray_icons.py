@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Значок трея: выбор варианта цвета штриха и состояния.
+"""Значок трея: вариант цвета под панель и проверка готовых файлов.
 
-Панель не перекрашивает чужие значки, поэтому цвет штриха выбирает само
-приложение. Здесь проверяется именно это решение: что «авто» следует
-системной теме, что настройка перекрывает автоопределение и что для каждого
-состояния в пакете есть файл значка.
+Панель не перекрашивает чужие значки, поэтому цвет выбирает само приложение.
+Здесь проверяется это решение и то, что в пакете действительно лежат оба
+варианта — и в SVG (основной формат), и растром нужных размеров.
 """
 from __future__ import annotations
 
@@ -29,23 +28,14 @@ def check(condition: bool, message: str) -> None:
     print(f"  ✓ {message}")
 
 
-def test_states() -> None:
-    """Состояние меняет имя значка, цвет штриха — вариант."""
-    print("\n1. Состояния и варианты цвета")
-    names = {
-        state: tray_icons.icon_name(state, tray_icons.PREFER_LIGHT)
-        for state in tray_icons.STATE_SUFFIX
-    }
-    check(len(set(names.values())) == 3, f"три разных значка: {list(names.values())}")
-    check(names["idle"].endswith("-tray-light"), "покой без суффикса состояния")
-    check(names["playing"].endswith("-wave"), "чтение — с волнами")
-    check(names["paused"].endswith("-pause"), "пауза — со знаком паузы")
-
-    dark = tray_icons.icon_name("idle", tray_icons.PREFER_DARK)
-    check(dark.endswith("-tray-dark"), f"тёмный штрих для светлой панели: {dark}")
-
-    unknown = tray_icons.icon_name("нет-такого", tray_icons.PREFER_DARK)
-    check(unknown.endswith("-tray-dark"), "неизвестное состояние — как покой")
+def test_variants() -> None:
+    """Два варианта цвета, имена различимы."""
+    print("\n1. Варианты цвета")
+    light = tray_icons.icon_name(tray_icons.PREFER_LIGHT)
+    dark = tray_icons.icon_name(tray_icons.PREFER_DARK)
+    check(light == "silero-tts-reader-tray-light", f"светлый штрих: {light}")
+    check(dark == "silero-tts-reader-tray-dark", f"тёмный штрих: {dark}")
+    check(light != dark, "имена вариантов различаются")
 
 
 def test_auto() -> None:
@@ -54,18 +44,18 @@ def test_auto() -> None:
     saved = tray_icons.system_is_dark
     try:
         tray_icons.system_is_dark = lambda: True
-        check(tray_icons.icon_name("idle", "auto").endswith("-tray-light"),
+        check(tray_icons.icon_name("auto").endswith("-tray-light"),
               "тёмная тема → светлый штрих")
         tray_icons.system_is_dark = lambda: False
-        check(tray_icons.icon_name("idle", "auto").endswith("-tray-dark"),
+        check(tray_icons.icon_name("auto").endswith("-tray-dark"),
               "светлая тема → тёмный штрих")
     finally:
         tray_icons.system_is_dark = saved
 
-    # Явная настройка сильнее темы: панель бывает не системной.
+    # Явная настройка сильнее темы: панель бывает не системная.
     tray_icons.system_is_dark = lambda: True
     try:
-        check(tray_icons.icon_name("idle", "dark").endswith("-tray-dark"),
+        check(tray_icons.icon_name("dark").endswith("-tray-dark"),
               "явный выбор перекрывает тёмную тему")
     finally:
         tray_icons.system_is_dark = saved
@@ -97,26 +87,29 @@ def test_theme_detection() -> None:
 
 
 def test_icons_exist() -> None:
-    """Для каждого имени в пакете есть файл нужных размеров."""
+    """Для каждого имени в пакете есть файлы: SVG и растры нужных размеров."""
     print("\n4. Файлы значков")
     with tempfile.TemporaryDirectory() as tmp:
         subprocess.run([sys.executable, str(ROOT / "packaging" / "make-icons.py"), tmp],
                        check=True, capture_output=True)
         base = Path(tmp)
         missing = []
-        for state in tray_icons.STATE_SUFFIX:
-            for prefer in ("light", "dark"):
-                name = tray_icons.icon_name(state, prefer)
-                for size in (16, 24, 32):
-                    path = base / f"hicolor/{size}x{size}/apps/{name}.png"
-                    if not path.is_file():
-                        missing.append(str(path.relative_to(base)))
-        check(not missing, f"все значки состояний на месте: {missing}")
+        for prefer in ("light", "dark"):
+            name = tray_icons.icon_name(prefer)
+            svg = base / f"hicolor/scalable/apps/{name}.svg"
+            if not svg.is_file():
+                missing.append(str(svg.relative_to(base)))
+            for size in (16, 22, 24, 32, 48):
+                png = base / f"hicolor/{size}x{size}/apps/{name}.png"
+                if not png.is_file():
+                    missing.append(str(png.relative_to(base)))
+        check(not missing, f"оба варианта на месте (SVG и 5 размеров): {missing}")
 
-        app = base / "hicolor/256x256/apps/silero-tts-reader.png"
-        check(app.is_file(), "иконка приложения 256 px есть")
+        app_svg = base / "hicolor/scalable/apps/silero-tts-reader.svg"
+        app_png = base / "hicolor/256x256/apps/silero-tts-reader.png"
+        check(app_svg.is_file(), "иконка приложения в SVG есть")
+        check(app_png.is_file(), "иконка приложения 256 px есть")
 
-        # Значок панели не должен нести плашку: у него прозрачные углы.
         from PIL import Image
 
         tray_png = Image.open(
@@ -124,6 +117,50 @@ def test_icons_exist() -> None:
         alpha = tray_png.split()[3]
         check(alpha.getpixel((0, 0)) == 0, "у значка трея прозрачный фон")
         check(tray_png.getbbox() is not None, "значок трея не пустой")
+
+        # Цвет штриха разный: на тёмной панели светлый, на светлой тёмный.
+        def ink(path: Path) -> tuple[int, int, int, int]:
+            img = Image.open(path).convert("RGBA")
+            px = img.load()
+            width, height = img.size
+            for y in range(height):
+                for x in range(width):
+                    r, g, b, a = px[x, y]
+                    if a > 200:
+                        return r, g, b, a
+            return 0, 0, 0, 0
+
+        light_ink = ink(base / "hicolor/24x24/apps/silero-tts-reader-tray-light.png")
+        dark_ink = ink(base / "hicolor/24x24/apps/silero-tts-reader-tray-dark.png")
+        check(light_ink[0] > 200 and light_ink[1] > 200,
+              f"вариант light светлый: {light_ink}")
+        check(dark_ink[0] < 90 and dark_ink[1] < 90,
+              f"вариант dark тёмный: {dark_ink}")
+
+
+def test_svg_colours() -> None:
+    """В SVG тот же цвет штриха, что и в растре: панель берёт любой из них."""
+    print("\n5. Цвет в SVG")
+    with tempfile.TemporaryDirectory() as tmp:
+        subprocess.run([sys.executable, str(ROOT / "packaging" / "make-icons.py"), tmp],
+                       check=True, capture_output=True)
+        base = Path(tmp)
+        light = (base / "hicolor/scalable/apps/silero-tts-reader-tray-light.svg"
+                 ).read_text(encoding="utf-8")
+        dark = (base / "hicolor/scalable/apps/silero-tts-reader-tray-dark.svg"
+                ).read_text(encoding="utf-8")
+        app = (base / "hicolor/scalable/apps/silero-tts-reader.svg"
+               ).read_text(encoding="utf-8")
+
+        check('fill="#fafafa"' in light, "светлый штрих в SVG")
+        check('fill="#2b2b2e"' in dark, "тёмный штрих в SVG")
+        check("viewBox" in light, "у значка трея есть viewBox: масштабируется")
+        check("linearGradient" in app and "<path" in app,
+              "иконка приложения: плашка с градиентом и знак")
+        # Тот же контур, что в исходнике: иначе варианты разъедутся.
+        d_light = light.split('d="')[1].split('"')[0]
+        d_dark = dark.split('d="')[1].split('"')[0]
+        check(d_light == d_dark, "контур у обоих вариантов одинаковый")
 
 
 def test_icon_file() -> None:
@@ -133,18 +170,19 @@ def test_icon_file() -> None:
     приложения, чем ничего. Пустая строка — только если не установлено ни то,
     ни другое.
     """
-    print("\n5. Файл по имени")
+    print("\n6. Файл по имени")
     found = tray_icons.icon_file("нет-такого-значка")
     check(found == "" or found.endswith("silero-tts-reader.png"),
           f"неизвестное имя — иконка приложения или пусто: {found!r}")
 
 
 def main() -> int:
-    print("Значок трея: вариант цвета и состояния")
-    test_states()
+    print("Значок трея: вариант цвета под панель")
+    test_variants()
     test_auto()
     test_theme_detection()
     test_icons_exist()
+    test_svg_colours()
     test_icon_file()
     print(f"\n  все проверки пройдены: {CHECKS}")
     return 0
