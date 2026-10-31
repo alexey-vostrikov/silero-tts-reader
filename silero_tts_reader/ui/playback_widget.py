@@ -739,13 +739,28 @@ class PlaybackWidget(Gtk.ApplicationWindow):
             GLib.timeout_add(120, self._place_after_show_source)
         # Один раз в журнал: видно ли окно на самом деле. Без этой строки
         # «окно не появилось» приходится угадывать.
+        #
+        # Размер читаем не сразу: в этот момент виджет ещё не разложен, и
+        # get_width() честно возвращает 0, хотя окно на экране нормальное.
+        # Строка «0×0» в журнале сбивала с толку при разборе жалоб на окно.
         # i18n: нет перевода — строка журнала в консоли
         print(
-            f"  Окно показано: {self.get_width()}×{self.get_height()}"
+            f"  Окно показано: запрошено {self.get_width() or self.get_default_size()[0]}"
+            f"×{self.get_height() or self.get_default_size()[1]}"
             f", позиция {self._position_mode}, видимо {self.get_visible()}",
             flush=True,
         )
+        GLib.timeout_add(300, self._log_real_size)
         return False   # одноразовый idle
+
+    def _log_real_size(self) -> bool:
+        """Настоящий размер после раскладки — одной строкой."""
+        # i18n: нет перевода — строка журнала в консоли
+        print(
+            f"  Окно разложено: {self.get_width()}×{self.get_height()}",
+            flush=True,
+        )
+        return False
 
     def schedule_hide(self, delay_ms: int = 2000) -> None:
         self._cancel_hide_timer()
