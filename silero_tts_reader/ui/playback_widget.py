@@ -25,7 +25,7 @@ from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 from ..core.audio_player import SPEED_AVAILABLE  # noqa: E402
 from ..i18n import _  # noqa: E402
-from . import layer_shell  # noqa: E402
+from . import layer_shell, window_placement  # noqa: E402
 from .window_icon import apply_icon  # noqa: E402
 
 WIDGET_WIDTH = 360
@@ -521,11 +521,34 @@ class PlaybackWidget(Gtk.ApplicationWindow):
             self.apply_theme(*self._last_theme)
 
     def _place_window(self) -> None:
-        """Поставить окно в правый нижний угол доступным способом."""
+        """Поставить окно в правый нижний угол доступным способом.
+
+        Порядок: протокол layer-shell, затем X11, затем хелпер оболочки по
+        D-Bus. Первые два работают до показа окна, третий — только после:
+        хелпер адресует окно номером из списка оболочки, а до map окна в этом
+        списке нет. Поэтому для него запоминается отложенное состояние.
+        """
         width = self._metrics.get("width", WIDGET_WIDTH)
         height = self._metrics.get("height", WIDGET_HEIGHT)
         self._position_mode = layer_shell.place_bottom_right(
             self, width, height, margin=16, monitor_index=self._monitor_index)
+        if self._position_mode == "none" and window_placement.available():
+            self._position_mode = "dbus-pending"
+
+    def _place_after_show(self) -> None:
+        """Доделать позицию через хелпер, когда окно уже показано."""
+        if self._position_mode != "dbus-pending":
+            return
+        width = self._metrics.get("width", WIDGET_WIDTH)
+        height = self._metrics.get("height", WIDGET_HEIGHT)
+        mode = window_placement.place_bottom_right(
+            self, width, height, margin=16, monitor_index=self._monitor_index)
+        self._position_mode = mode if mode != "none" else "dbus-failed"
+
+    def _place_after_show_source(self) -> bool:
+        """Обёртка таймера: одноразовый вызов доработки позиции."""
+        self._place_after_show()
+        return False
 
     def restore_position(self, x: int, y: int) -> None:
         """Вернуть окно на сохранённое место (только если это возможно).
@@ -540,6 +563,17 @@ class PlaybackWidget(Gtk.ApplicationWindow):
             return
         if self._position_mode == "x11":
             layer_shell.move_x11(self, x, y)
+            return
+        if self._position_mode in ("dbus", "dbus-pending"):
+            # Сохранённая позиция в логических пикселях, а Move ждёт физические.
+            monitor = self._monitor()
+            scale = max(1, monitor.get_scale_factor()) if monitor is not None else 1
+            window_id = window_placement.find_window(
+                title=self.get_title(),
+                size=(self._metrics.get("width", WIDGET_WIDTH) * scale,
+                      self._metrics.get("height", WIDGET_HEIGHT) * scale))
+            if window_id is not None:
+                window_placement.move_window(window_id, x * scale, y * scale)
 
     def fade_in(self) -> None:
         """Показать окно, не блокируя главный поток.
@@ -558,6 +592,10 @@ class PlaybackWidget(Gtk.ApplicationWindow):
         # Позицию задаём после показа: до map менеджер окон её игнорирует.
         if self._position_mode != "layer":
             self._place_window()
+        # Хелперу оболочки нужен номер окна, а он есть только после map.
+        # Небольшая пауза: окно должно успеть попасть в список композитора.
+        if self._position_mode == "dbus-pending":
+            GLib.timeout_add(120, self._place_after_show_source)
         # Один раз в журнал: видно ли окно на самом деле. Без этой строки
         # «окно не появилось» приходится угадывать.
         # i18n: нет перевода — строка журнала в консоли
