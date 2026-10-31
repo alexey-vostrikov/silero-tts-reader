@@ -28,6 +28,15 @@ _MODIFIERS = {
     ec.KEY_LEFTMETA, ec.KEY_RIGHTMETA,
 } if HAS_EVDEV else set()
 
+# Как получить доступ к устройствам ввода. Одна строка на обе ветки: иначе
+# советы в них разъезжаются, а именно этот текст пользователь и читает.
+# Права даёт группа input — /dev/input/event* принадлежат root:input с режимом
+# 0640. chmod 666 — слишком сильное ослабление безопасности: устройства ввода
+# открываются всем в системе, а права слетают при переподключении клавиатуры.
+INPUT_GROUP_HINT = (
+    "    sudo usermod -aG input $USER      # доступ к /dev/input/, затем перелогиниться"
+)
+
 _REGULAR_KEY_MAP: dict[str, int] = {
     "a": ec.KEY_A, "b": ec.KEY_B, "c": ec.KEY_C, "d": ec.KEY_D,
     "e": ec.KEY_E, "f": ec.KEY_F, "g": ec.KEY_G, "h": ec.KEY_H,
@@ -458,18 +467,22 @@ class HotkeyListener:
                 self._evdev_listener.start()
         elif not HAS_PYNPUT:
             self._backend = "none"
+            # i18n: нет перевода — строка журнала в консоли
             print(
-                "  ✗ Горячие клавиши недоступны: нет ни evdev (нужны права на /dev/input/), "
+                "  ✗ Горячие клавиши недоступны: нет ни evdev (нет доступа к /dev/input/), "
                 "ни pynput.\n"
                 "    sudo apt install python3-pynput   # X11\n"
-                "    sudo usermod -aG input $USER      # Wayland, затем перелогиниться",
+                f"{INPUT_GROUP_HINT}",
                 flush=True,
             )
             return
         else:
             self._backend = "pynput"
-            print("  ⚠ evdev не доступен (требуются права доступа к /dev/input/). Использование pynput (X11 fallback)...", flush=True)
-            print("    Для поддежки хоткеев на Wayland выполните: sudo chmod 666 /dev/input/event*", flush=True)
+            # i18n: нет перевода — строка журнала в консоли
+            print("  ⚠ evdev недоступен (нет доступа к /dev/input/). "
+                  "Использую pynput — это работает только в X11.", flush=True)
+            # i18n: нет перевода — строка журнала в консоли
+            print(INPUT_GROUP_HINT, flush=True)
             if not self._pynput_listener:
                 self._pynput_listener = PynputHotkeyListener()
             self._pynput_listener.set_hotkeys(hotkey_map)

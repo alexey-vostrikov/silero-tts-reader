@@ -12,6 +12,8 @@
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import sys
 import types
 from pathlib import Path
@@ -124,10 +126,80 @@ def test_hotkeys_usable_without_pynput() -> None:
     check(facade._backend in {"evdev", "pynput", "none"}, f"бэкенд определён: {facade._backend}")
 
 
+def test_advice_uses_input_group() -> None:
+    """Совет про доступ к /dev/input — это группа input, а не chmod.
+
+    ``chmod 666 /dev/input/event*`` открывает клавиатуру всем в системе и
+    слетает при перезагрузке или переподключении устройства, поэтому такой
+    совет не должен вернуться ни в одну из веток. Проверяем живой вывод обеих
+    веток, а не константу: важно, что видит пользователь.
+    """
+    print("\n3. Совет про доступ к устройствам ввода")
+    hint = hl.INPUT_GROUP_HINT
+    check("usermod -aG input" in hint, f"совет: {hint.strip()}")
+    check("chmod" not in hint, "в совете только группа input")
+    check("перелогин" in hint, "сказано про перелогин: без него группа не применится")
+
+    # Ветка «ни evdev, ни pynput»: совет должен дойти до вывода целиком.
+    hl.pynput_keyboard = None
+    hl.HAS_PYNPUT = False
+    facade = hl.HotkeyListener()
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        facade.set_hotkeys(
+            speak_selection="<ctrl>+<alt>+r",
+            speak_clipboard="<ctrl>+<alt>+c",
+            stop="<ctrl>+<alt>+s",
+            on_speak_selection=lambda: None,
+            on_speak_clipboard=lambda: None,
+            on_stop=lambda: None,
+        )
+    text = output.getvalue()
+    check(hint in text, "ветка без бэкенда печатает совет про группу input")
+    check("chmod 666" not in text, "вывод предлагает только группу input")
+
+
+def test_advice_in_pynput_branch() -> None:
+    """Та же строка в ветке pynput: советы не должны разъезжаться."""
+    print("\n4. Совет в ветке pynput")
+
+    class _StubFacade:
+        def set_hotkeys(self, _map) -> None:
+            pass
+
+    hl.pynput_keyboard = types.SimpleNamespace(Listener=_StubListener)
+    hl.HAS_PYNPUT = True
+    saved = hl.PynputHotkeyListener
+    hl.PynputHotkeyListener = _StubFacade  # type: ignore[assignment]
+    try:
+        facade = hl.HotkeyListener()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            facade.set_hotkeys(
+                speak_selection="<ctrl>+<alt>+r",
+                speak_clipboard="<ctrl>+<alt>+c",
+                stop="<ctrl>+<alt>+s",
+                on_speak_selection=lambda: None,
+                on_speak_clipboard=lambda: None,
+                on_stop=lambda: None,
+            )
+        # На машине с доступом к /dev/input ветка evdev, и совета не будет.
+        if facade._backend == "pynput":
+            check(hl.INPUT_GROUP_HINT in output.getvalue(),
+                  "ветка pynput печатает тот же совет")
+        else:
+            check(facade._backend == "evdev",
+                  f"evdev доступен — совет не нужен: {facade._backend}")
+    finally:
+        hl.PynputHotkeyListener = saved  # type: ignore[assignment]
+
+
 def main() -> int:
     print("Хоткеи: разбор и установка")
     test_parse()
     test_set_hotkeys()
+    test_advice_uses_input_group()
+    test_advice_in_pynput_branch()
     test_hotkeys_usable_without_pynput()
     print(f"\nвсе проверки пройдены: {CHECKS}")
     return 0
