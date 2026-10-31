@@ -22,6 +22,7 @@ from ..core.audio_player import SPEED_AVAILABLE  # noqa: E402
 from ..core.hotkey_listener import HotkeyListener  # noqa: E402
 from ..core.text_processor import TextProcessor  # noqa: E402
 from ..i18n import _  # noqa: E402
+from .css_scope import scope_css  # noqa: E402
 from .theme_manager import ThemeManager, rgba  # noqa: E402
 from .window_icon import apply_icon  # noqa: E402
 
@@ -323,6 +324,8 @@ class SettingsWindow(Gtk.Dialog):
         parent: Gtk.Window | None = None,
     ) -> None:
         super().__init__(title=_("Настройки — Silero TTS Reader"), transient_for=parent, modal=True)
+        # Класс-область: правила этого окна не должны доходить до плеера.
+        self.add_css_class("settings-window")
         self._config = config
         # Голоса по языкам: у русской модели шесть голосов, у английской — 119,
         # поэтому выбор идёт с поиском, а не перебором в выпадающем списке.
@@ -390,7 +393,8 @@ class SettingsWindow(Gtk.Dialog):
 
         provider = Gtk.CssProvider()
         provider.load_from_data(
-            f"""
+            scope_css(
+                f"""
             dialog {{ background-color: {bg}; }}
             dialog label {{ color: {fg}; font-size: 13px; }}
             notebook > header {{ background-color: transparent; border: none; }}
@@ -446,7 +450,9 @@ class SettingsWindow(Gtk.Dialog):
             scale trough {{ background-color: {border}; border-radius: 2px; min-height: 4px; }}
             scale highlight {{ background-color: {accent}; border-radius: 2px; }}
             scale slider {{ background-color: {accent}; border: none; border-radius: 6px; min-width: 12px; min-height: 12px; margin: -4px 0; }}
-            """.encode()
+            """,
+                ".settings-window",
+            ).encode()
         )
         Gtk.StyleContext.add_provider_for_display(
             self.get_display(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
@@ -463,10 +469,12 @@ class SettingsWindow(Gtk.Dialog):
         self._notebook.append_page(self._build_hotkeys_tab(), Gtk.Label(label="⌨️"))
         self._notebook.append_page(self._build_voice_tab(), Gtk.Label(label="🎭"))
         self._notebook.append_page(self._build_appearance_tab(), Gtk.Label(label="🎨"))
+        self._notebook.append_page(self._build_positioning_tab(), Gtk.Label(label="🪟"))
         self._notebook.append_page(self._build_ai_tab(), Gtk.Label(label="🤖"))
         self._notebook.set_tab_pos(Gtk.PositionType.TOP)
         for index, tip in enumerate(
-            ("Горячие клавиши", "Голос и аудио", "Внешний вид", "ИИ & Транслитерация")
+            ("Горячие клавиши", "Голос и аудио", "Внешний вид", "Позиционирование окна",
+             "ИИ & Транслитерация")
         ):
             self._notebook.get_nth_page(index).set_tooltip_text(tip)
         content.append(self._notebook)
@@ -781,6 +789,127 @@ class SettingsWindow(Gtk.Dialog):
 
     # ── Вкладка «ИИ и транслитерация» ────────────────────────────────────────
 
+    def _build_positioning_tab(self) -> Gtk.Widget:
+        """Вкладка «Позиционирование окна».
+
+        Отдельная вкладка, потому что это единственная функция, которая просит
+        у системы то, чего Wayland-клиенту не даёт: поставить окно верхнего
+        уровня в конкретную точку. По умолчанию выключена — окно встаёт туда,
+        куда его положит композитор.
+        """
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        page.set_margin_top(12)
+        page.set_margin_bottom(12)
+        page.set_margin_start(12)
+        page.set_margin_end(12)
+
+        group = Gtk.Frame(label=_("ПОЛОЖЕНИЕ ОКНА ПЛЕЕРА"))
+        grid = Gtk.Grid(row_spacing=10, column_spacing=12)
+        grid.set_margin_top(10)
+        grid.set_margin_bottom(10)
+        grid.set_margin_start(10)
+        grid.set_margin_end(10)
+        group.set_child(grid)
+        page.append(group)
+
+        self._positioning_switch = Gtk.Switch()
+        enabled = self._pending.get(
+            "window_positioning", self._config.window_positioning) != "off"
+        self._positioning_switch.set_active(bool(enabled))
+        # У Gtk.Switch нет сигнала toggled: состояние приходит через свойство.
+        self._positioning_switch.connect("notify::active",
+                                         self._on_positioning_toggled)
+        grid.attach(self._label(_("Ставить окно в угол экрана:")), 0, 0, 1, 1)
+        grid.attach(self._positioning_switch, 1, 0, 1, 1)
+
+        self._positioning_combo = Gtk.ComboBoxText()
+        for label, value in (
+            (_("Авто (что доступно в системе)"), "auto"),
+            (_("Протокол layer-shell"), "layer"),
+            (_("Расширение оболочки (Window Calls)"), "shell"),
+        ):
+            self._positioning_combo.append(value, label)
+        current = self._pending.get(
+            "window_positioning", self._config.window_positioning)
+        if not self._positioning_combo.set_active_id(current if current != "off" else "auto"):
+            self._positioning_combo.set_active_id("auto")
+        self._positioning_combo.connect("changed", self._on_positioning_method_changed)
+        self._positioning_combo.set_sensitive(bool(enabled))
+        grid.attach(self._label(_("Способ:")), 0, 1, 1, 1)
+        grid.attach(self._positioning_combo, 1, 1, 1, 1)
+
+        hint = Gtk.Label()
+        hint.set_wrap(True)
+        hint.set_xalign(0.0)
+        hint.add_css_class("dim-label")
+        hint.set_text(_(
+            "Выключено по умолчанию: место окна выбирает оконный менеджер.\n"
+            "Включение требует либо протокола layer-shell (в обычном GNOME его нет), "
+            "либо расширения оболочки Window Calls. Слой layer-shell перекрывает "
+            "панели и всплывающие меню, поэтому при проблемах со нажатиями "
+            "оставьте этот режим выключенным."
+        ))
+        page.append(hint)
+
+        log_group = Gtk.Frame(label=_("ЖУРНАЛ ДИАГНОСТИКИ"))
+        log_grid = Gtk.Grid(row_spacing=10, column_spacing=12)
+        log_grid.set_margin_top(10)
+        log_grid.set_margin_bottom(10)
+        log_grid.set_margin_start(10)
+        log_grid.set_margin_end(10)
+        log_group.set_child(log_grid)
+        page.append(log_group)
+
+        self._log_level_combo = Gtk.ComboBoxText()
+        for label, value in (
+            (_("Только ошибки"), "quiet"),
+            (_("Обычный"), "normal"),
+            (_("Подробный"), "detail"),
+            (_("Отладка (с текстом и ответами ИИ)"), "debug"),
+        ):
+            self._log_level_combo.append(value, label)
+        current_log = self._pending.get("log_level", self._config.log_level)
+        if not self._log_level_combo.set_active_id(current_log):
+            self._log_level_combo.set_active_id("normal")
+        self._log_level_combo.connect(
+            "changed",
+            lambda w: self._pending.update({"log_level": w.get_active_id()})
+            if w.get_active_id() else None,
+        )
+        log_grid.attach(self._label(_("Подробность журнала:")), 0, 0, 1, 1)
+        log_grid.attach(self._log_level_combo, 1, 0, 1, 1)
+
+        log_hint = Gtk.Label()
+        log_hint.set_wrap(True)
+        log_hint.set_xalign(0.0)
+        log_hint.add_css_class("dim-label")
+        log_hint.set_text(_(
+            "Уровень действует на следующий запуск: журнал печатается в консоль, "
+            "из которой запущено приложение. Ключ --log-level перекрывает эту "
+            "настройку только на время запуска и её не меняет."
+        ))
+        page.append(log_hint)
+
+        _spacer = Gtk.Box()
+        _spacer.set_hexpand(True)
+        _spacer.set_vexpand(True)
+        page.append(_spacer)
+        return page
+
+    def _on_positioning_toggled(self, switch: Gtk.Switch, _param=None) -> None:
+        """Включение/выключение режима: способ доступен только при включённом."""
+        enabled = switch.get_active()
+        self._positioning_combo.set_sensitive(enabled)
+        method = self._positioning_combo.get_active_id() or "auto"
+        self._pending["window_positioning"] = method if enabled else "off"
+
+    def _on_positioning_method_changed(self, combo: Gtk.ComboBoxText) -> None:
+        if not self._positioning_switch.get_active():
+            return
+        method = combo.get_active_id()
+        if method:
+            self._pending["window_positioning"] = method
+
     def _build_ai_tab(self) -> Gtk.Widget:
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         page.set_margin_top(12)
@@ -935,8 +1064,9 @@ class SettingsWindow(Gtk.Dialog):
             text=_("Тест ИИ API") if ok else "Ошибка ИИ API",
         )
         dialog.format_secondary_text(msg)
-        dialog.run()
-        dialog.destroy()
+        # run() в GTK4 удалён: диалог показывается, а закрывается по ответу.
+        dialog.connect("response", lambda d, _r: d.destroy())
+        dialog.present()
 
     def _on_theme_changed(self, combo: Gtk.ComboBoxText) -> None:
         theme = combo.get_active_id()
@@ -1072,7 +1202,8 @@ class SettingsWindow(Gtk.Dialog):
             for language, voice in speakers.items():
                 self._config.set_speaker(str(language), str(voice))
 
-        for key in ("speed", "theme", "use_system_accent"):
+        for key in ("speed", "theme", "use_system_accent", "window_positioning",
+                    "log_level"):
             if key in self._pending:
                 setattr(self._config, key, self._pending[key])
 
@@ -1101,8 +1232,8 @@ class SettingsWindow(Gtk.Dialog):
             text=_("Язык интерфейса изменится после перезапуска приложения."),
         )
         dialog.set_title(_("Язык интерфейса"))
-        dialog.run()
-        dialog.destroy()
+        dialog.connect("response", lambda d, _r: d.destroy())
+        dialog.present()
 
     def _on_reset(self) -> None:
         dialog = Gtk.MessageDialog(
@@ -1113,11 +1244,16 @@ class SettingsWindow(Gtk.Dialog):
             text=_("Сбросить все настройки к значениям по умолчанию?"),
         )
         dialog.set_title(_("Сброс настроек"))
-        answer = dialog.run()
-        dialog.destroy()
-        if answer == Gtk.ResponseType.YES:
+
+        def on_response(d, response: int) -> None:
+            d.destroy()
+            if response != Gtk.ResponseType.YES:
+                return
             self._config.reset_to_defaults()
             self._pending.clear()
             if self.on_saved:
                 self.on_saved()
             self.destroy()
+
+        dialog.connect("response", on_response)
+        dialog.present()

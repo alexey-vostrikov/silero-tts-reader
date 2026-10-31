@@ -6,6 +6,25 @@ import sys
 from pathlib import Path
 
 
+def _positioning_enabled() -> bool:
+    """Включено ли глобальное позиционирование в настройках приложения.
+
+    Читается до импорта приложения и без него: нужен только один ключ. Если
+    файла нет, ключа нет или он битый — режим считается выключенным, как и по
+    умолчанию: без layer-shell окно встаёт туда, куда его положит композитор.
+    """
+    import json
+
+    path = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) \
+        / "silero-tts-reader" / "config.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    value = (data.get("ui") or {}).get("window_positioning", "off")
+    return value in ("auto", "layer")
+
+
 def _ensure_layer_shell_preload() -> None:
     """Перезапустить процесс с LD_PRELOAD, чтобы заработал layer-shell.
 
@@ -13,8 +32,14 @@ def _ensure_layer_shell_preload() -> None:
     Wayland; при загрузке через ctypes перехват не встаёт, и протокол молча не
     работает (окно остаётся там, куда его положит композитор). Перезапуск
     делает только Wayland-сессия и только один раз.
+
+    Перезапуск нужен, лишь когда позиционирование включено и выбран способ с
+    layer-shell: при выключенном режиме протокол не используется вовсе, и
+    лишний LD_PRELOAD в процессе ни к чему.
     """
     if not os.environ.get("WAYLAND_DISPLAY"):
+        return
+    if not _positioning_enabled():
         return
     marker = "SILERO_LAYER_SHELL_PRELOADED"
     if os.environ.get(marker):

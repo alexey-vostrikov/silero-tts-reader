@@ -24,9 +24,14 @@ import gi
 gi.require_version("Gio", "2.0")
 gi.require_version("Gtk", "4.0")
 
-from gi.repository import Gio, GLib, Gtk  # noqa: E402
+from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 
-from . import build_info, i18n, instance  # noqa: E402
+from . import (  # noqa: E402
+    build_info,
+    i18n,
+    instance,
+    log,
+)
 from .config.config_manager import ConfigManager  # noqa: E402
 from .core.audio_player import AudioPlayer  # noqa: E402
 from .core.hotkey_listener import HotkeyListener  # noqa: E402
@@ -35,6 +40,7 @@ from .core.text_processor import TextProcessor  # noqa: E402,F401  (нужен �
 from .core.tts_engine import TTSEngine, TTSLoadError  # noqa: E402
 from .core.tts_worker import TTSWorker  # noqa: E402
 from .i18n import _  # noqa: E402
+from .run_options import RunOptions  # noqa: E402
 from .ui import window_icon  # noqa: E402
 from .ui.playback_widget import PlaybackWidget  # noqa: E402
 from .ui.settings_window import SettingsWindow  # noqa: E402
@@ -59,7 +65,7 @@ APP_VERSION = "1.0.0"
 class Application(Gtk.Application):
     """Приложение целиком: конфиг, движок, плеер, трей и настройки."""
 
-    def __init__(self, argv: list[str]) -> None:
+    def __init__(self, argv: list[str], options: RunOptions | None = None) -> None:
         # HANDLES_OPEN: `silero-tts-reader текст.txt`, «Открыть с помощью» и
         # перетаскивание файла на иконку приходят в do_open, а не в activate.
         super().__init__(
@@ -67,6 +73,9 @@ class Application(Gtk.Application):
             flags=Gio.ApplicationFlags.HANDLES_OPEN,
         )
         self._argv = list(argv)
+        # Ограничения только на этот запуск: --max-time и --exit-after-play.
+        self._options = options or RunOptions()
+        self._max_time_source: int | None = None
         self._initialized = False
 
         self._config = ConfigManager()
@@ -87,6 +96,12 @@ class Application(Gtk.Application):
         self._widget: PlaybackWidget | None = None
         self._tray: StatusNotifierTray | None = None
         self._settings_dialog: SettingsWindow | None = None
+        # Ссылка на открытый диалог выбора файла обязательна: без неё
+        # Gtk.FileChooserNative освобождается и не показывается.
+        self._file_chooser = None
+        # Ссылка на окно «О программе»: без неё GTK4-диалог освобождается
+        # сборщиком мусора и не появляется.
+        self._about_dialog = None
         self._position_timer: int | None = None
 
     # ── Жизненный цикл ───────────────────────────────────────────────────────
@@ -104,7 +119,7 @@ class Application(Gtk.Application):
         # процесс. Раньше do_activate отрабатывал целиком, и каждая комбинация
         # срабатывала дважды, а libayatana ругался «Объект уже экспортирован».
         if self._initialized:
-            print("  Приложение уже запущено — поднимаю виджет", flush=True)
+            log.info("Приложение уже запущено — поднимаю виджет")
             if self._widget is not None:
                 self._widget.fade_in()
             return
@@ -115,7 +130,10 @@ class Application(Gtk.Application):
         instance.register(build_info.current())
 
         self._theme_manager = ThemeManager()
-        self._widget = PlaybackWidget(application=self)
+        # Глобальное позиционирование выключено по умолчанию: место окна
+        # выбирает композитор. Включается на вкладке «Позиционирование».
+        self._widget = PlaybackWidget(application=self,
+                                      positioning=self._config.window_positioning)
         self._widget.restore_position(*self._config.widget_position)
         self._wire_widget()
         # Окно привязываем к приложению: иначе действия app.* из меню не найдутся
@@ -244,6 +262,13 @@ class Application(Gtk.Application):
         if not self._initialized:
             self.do_activate()
 
+        # Второй диалог поверх первого — это три-четыре одинаковых окна:
+        # портал рисует их сам, и они не связаны с нашим. Пока один открыт,
+        # повторное нажатие только поднимает его.
+        if self._file_chooser is not None:
+            self._file_chooser.show()
+            return
+
         chooser = Gtk.FileChooserNative.new(
             _("Открыть файл для озвучки"),
             self._widget,
@@ -272,10 +297,19 @@ class Application(Gtk.Application):
         chooser.set_filter(books)
 
         # Папка из настроек: обычно книги лежат в одном месте.
+        # В GTK4 метод ждёт Gio.File: со строкой он падает TypeError прямо в
+        # обработчике нажатия, и диалог не появляется вовсе.
         last_dir = self._config.last_file_dir
         if last_dir:
             with contextlib.suppress(GLib.Error):
-                chooser.set_current_folder(last_dir)
+                chooser.set_current_folder(Gio.File.new_for_path(last_dir))
+
+        # Ссылка обязательна. Gtk.FileChooserNative живёт, пока на него есть
+        # ссылка из Python: локальная переменная исчезает при выходе из
+        # функции, сборщик мусора освобождает диалог, и он не появляется —
+        # ни ошибки, ни окна. Проверено отдельным опытом: после del + gc
+        # в списке окон остаётся только главное.
+        self._file_chooser = chooser
 
         def on_response(dialog, response):
             path = None
@@ -283,6 +317,7 @@ class Application(Gtk.Application):
                 gfile = dialog.get_file()
                 path = gfile.get_path() if gfile else None
             dialog.destroy()
+            self._file_chooser = None
             if path:
                 self._remember_dir(path)
                 self._speak_paths([path])
@@ -337,7 +372,7 @@ class Application(Gtk.Application):
             pass  # не критично: остаётся обычное поведение по умолчанию
 
     def _on_sigterm(self) -> bool:
-        print("  Получен сигнал завершения — закрываюсь", flush=True)
+        log.info("Получен сигнал завершения — закрываюсь")
         instance.clear()
         self._quit()
         return False  # одноразовый обработчик
@@ -361,7 +396,7 @@ class Application(Gtk.Application):
     def _load_engine(self) -> None:
         def _load() -> None:
             try:
-                print("  Загружаю модель TTS...", flush=True)
+                log.info("Загружаю модель TTS...")
                 self._engine.load()
                 speakers = self._engine.get_available_speakers()
                 if self._config.speaker not in speakers and speakers:
@@ -511,22 +546,69 @@ class Application(Gtk.Application):
         self._tray.set_icon_name(tray_icon_name(self._config.tray_icon))
 
     def _on_playback_started(self) -> None:
+        self._arm_max_time()
         if self._widget is None:
             return
         # Окно уже показано в _begin_pipeline: повторный fade_in переставлял
         # его и печатал «Окно показано» дважды.
         self._widget.set_paused(False)
 
+    def _arm_max_time(self) -> None:
+        """Поставить ограничение по времени, если задан --max-time.
+
+        Ограничение — на ВСЁ воспроизведение, а не на квант: таймер ставится
+        один раз, когда звук начался, и по его срабатыванию чтение
+        останавливается целиком. Отсчёт от начала звука, а не от запуска
+        приложения: загрузка модели и первый синтез занимают секунды, и в них
+        ограничение не должно тратиться. Время на паузах тоже считается —
+        это срок отладочного прогона, а не секундомер прослушивания.
+        """
+        limit = self._options.max_time
+        if limit is None or self._max_time_source is not None:
+            return
+        self._max_time_source = GLib.timeout_add(int(limit * 1000), self._on_max_time)
+
+    def _disarm_max_time(self) -> None:
+        """Снять таймер ограничения: чтение закончилось раньше срока."""
+        if self._max_time_source is not None:
+            GLib.source_remove(self._max_time_source)
+            self._max_time_source = None
+
+    def _on_max_time(self) -> bool:
+        """Срок --max-time вышел: остановить чтение (и выйти, если просили)."""
+        self._max_time_source = None
+        # i18n: нет перевода — строка журнала в консоли
+        log.info(f"Отладка: прошло {self._options.max_time:g} с — останавливаю чтение")
+        self._stop_playback_sync()
+        if self._widget is not None:
+            self._widget.schedule_hide(500)
+        if self._options.exit_after_play:
+            GLib.timeout_add(200, self._quit_after_play)
+        return False   # одноразовый таймер
+
+    def _quit_after_play(self) -> bool:
+        """--exit-after-play: завершить приложение после чтения."""
+        # i18n: нет перевода — строка журнала в консоли
+        log.info("Отладка: чтение закончено — выхожу")
+        self._quit()
+        return False
+
     def _on_segment_progress(self, value: float) -> None:
         if self._widget is not None:
             self._widget.set_progress(value)
 
     def _on_playback_finished(self) -> None:
+        self._disarm_max_time()
         if self._widget is not None:
             self._widget.set_paused(False)
             self._widget.schedule_hide(2000)
+        if self._options.exit_after_play:
+            # Небольшая пауза: окно должно успеть скрыться, иначе выход
+            # выглядит как падение на середине фразы.
+            GLib.timeout_add(400, self._quit_after_play)
 
     def _on_playback_stopped(self) -> None:
+        self._disarm_max_time()
         if self._widget is not None:
             self._widget.schedule_hide(500)
 
@@ -605,7 +687,14 @@ class Application(Gtk.Application):
         dialog.on_saved = self._apply_settings
         self._settings_dialog = dialog
         dialog.connect("destroy", self._on_settings_closed)
+        dialog.connect("close-request", self._on_settings_close_request)
         dialog.present()
+
+    def _on_settings_close_request(self, dialog) -> bool:
+        """Закрытие всегда уничтожает окно: скрытое окно путало повторный запуск."""
+        self._settings_dialog = None
+        dialog.destroy()
+        return True    # уничтожение уже выполнено, стандартный обработчик не нужен
 
     def _on_settings_closed(self, *_args) -> None:
         self._settings_dialog = None
@@ -616,6 +705,8 @@ class Application(Gtk.Application):
             self._theme_manager.set_mode(self._config.theme)
         self._update_widget_theme()
         self._register_hotkeys()
+        if self._widget is not None:
+            self._widget.set_positioning(self._config.window_positioning)
         # Значок трея мог сменить вариант цвета: переставляем без перезапуска.
         if self._widget is not None:
             self._widget.set_speed(self._config.speed)
@@ -660,7 +751,18 @@ class Application(Gtk.Application):
         dialog.present()
 
     def _show_about(self) -> None:
-        dialog = Gtk.AboutDialog(modal=True)
+        """Окно «О программе».
+
+        В GTK4 у диалогов нет ``run()``: он блокировал цикл и удалён. Диалог
+        показывается через ``present()``, а уничтожается по сигналу ``close``.
+        Ссылка хранится на приложении: без неё диалог уходит в сборщик
+        мусора, как и диалог выбора файла.
+        """
+        if self._about_dialog is not None:
+            self._about_dialog.present()
+            return
+
+        dialog = Gtk.AboutDialog(modal=False)
         dialog.set_program_name(APP_NAME)
         dialog.set_version(APP_VERSION)
         dialog.set_comments(_(
@@ -670,9 +772,18 @@ class Application(Gtk.Application):
         path = icon_file()
         if path:
             with contextlib.suppress(Exception):
-                dialog.set_logo(GdkPixbuf_from_file(path))
-        dialog.run()
-        dialog.destroy()
+                # В GTK4 set_logo ждёт Gdk.Paintable: GdkPixbuf.Pixbuf даёт
+                # TypeError, и значок молча не появлялся. Texture — Paintable.
+                dialog.set_logo(Gdk.Texture.new_from_filename(path))
+
+        def on_close(window) -> bool:
+            self._about_dialog = None
+            return False    # стандартное закрытие: окно уничтожается само
+
+        dialog.connect("close-request", on_close)
+        dialog.connect("destroy", lambda *_a: setattr(self, "_about_dialog", None))
+        self._about_dialog = dialog
+        dialog.present()
 
     # ── Позиция виджета ──────────────────────────────────────────────────────
 
@@ -699,11 +810,3 @@ class Application(Gtk.Application):
             self._tray.hide()
         self.release()
         self.quit()
-
-
-def GdkPixbuf_from_file(path: str):
-    """Логотип для диалога «О программе» (импорт здесь, чтобы не тянуть gi вверху)."""
-    gi.require_version("GdkPixbuf", "2.0")
-    from gi.repository import GdkPixbuf
-
-    return GdkPixbuf.Pixbuf.new_from_file(path)
