@@ -275,6 +275,31 @@ TRANSLATIONS = {
     "Ошибка TTS": "TTS error",
     "Пауза": "Paused",
     "ПАУЗЫ": "PAUSES",
+    "ЧТЕНИЕ ТЕКСТА": "READING TEXT",
+    "Ударения:": "Stress:",
+    "Как решит модель": "As the model decides",
+    "Только мои правки": "My corrections only",
+    "Словарь и мои правки": "Dictionary and my corrections",
+    "Словарь расставляет ударения без нейросети: он выручает на словах "
+    "вроде «звонят» и «договор», где модель ошибается. "
+    "Встроенный словарь правится файлом stress.json в каталоге настроек.":
+        "The dictionary places stress without a neural network: it helps with "
+        "words like «звонят» and «договор», where the model gets it wrong. "
+        "Correct the built-in dictionary in stress.json inside the settings folder.",
+    "Сокращения:": "Abbreviations:",
+    "Известные и сокращения с точкой": "Known ones and dotted forms",
+    "Все заглавные — по буквам": "All capitals letter by letter",
+    "Не разворачивать": "Leave as is",
+    "«т.д.» читается как «так далее», «РФ» — как «эр эф». "
+    "Режим «все заглавные» разбирает по буквам и незнакомые "
+    "аббревиатуры, но может ошибиться на тех, что читаются словом.":
+        "«т.д.» is read as «так далее», «РФ» as «эр эф». "
+        "The all-capitals mode spells even unknown abbreviations, but may be "
+        "wrong for those pronounced as a word.",
+    "Сокращения с неоднозначным смыслом («г.», «с.») "
+    "не разворачиваются: неверная расшифровка хуже пропуска.":
+        "Ambiguous abbreviations («г.», «с.») are left alone: "
+        "a wrong expansion is worse than none.",
     "мс": "ms",
     "Перед репликой:": "Before a replica:",
     "Тишина перед прямой речью, начинающейся с тире":

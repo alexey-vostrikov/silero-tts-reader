@@ -44,6 +44,12 @@ DEFAULTS: dict[str, Any] = {
         # переключать язык внутри фразы по письменности (латиница — en)
         "mixed": False,
         "sample_rate": 48000,
+        # Ударения по словарю: off — ничего не трогать (модель ставит сама),
+        # user — только правки пользователя, dict — словарь, омографы и правки.
+        "stress_dict": "off",
+        # Сокращения: off — не трогать, known — расшифровки с точками и
+        # известные аббревиатуры, all — плюс любое слово из заглавных по буквам.
+        "abbreviations": "known",
     },
     "playback": {
         "speed": 1.0,
@@ -285,6 +291,38 @@ class ConfigManager:
     @property
     def sample_rate(self) -> int:
         return self.get("tts", "sample_rate", default=48000)
+
+    @property
+    def stress_dict(self) -> str:
+        """Режим словаря ударений: off, user или dict.
+
+        По умолчанию ``off``: у модели есть свой акцентор, и подменять его
+        целиком без нужды нельзя — словарное ударение ошибается иначе, чем
+        модель, и заметить это можно только на слух.
+        """
+        value = self.get("tts", "stress_dict", default="off")
+        return value if value in ("off", "user", "dict") else "off"
+
+    @stress_dict.setter
+    def stress_dict(self, v: str) -> None:
+        if v in ("off", "user", "dict"):
+            self.set("tts", "stress_dict", v)
+
+    @property
+    def abbreviations(self) -> str:
+        """Режим расшифровки сокращений: off, known или all."""
+        value = self.get("tts", "abbreviations", default="known")
+        return value if value in ("off", "known", "all") else "known"
+
+    @abbreviations.setter
+    def abbreviations(self, v: str) -> None:
+        if v in ("off", "known", "all"):
+            self.set("tts", "abbreviations", v)
+
+    @property
+    def stress_file(self) -> Path:
+        """Файл правок ударений рядом с настройками."""
+        return self._path.with_name("stress.json")
 
     @property
     def speed(self) -> float:
