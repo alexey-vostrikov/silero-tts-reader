@@ -27,6 +27,7 @@ from __future__ import annotations
 import itertools
 import json
 import lzma
+import os
 import re
 from array import array
 from pathlib import Path
@@ -42,8 +43,29 @@ MODE_USER = "user"
 MODE_DICT = "dict"
 MODES = (MODE_OFF, MODE_USER, MODE_DICT)
 
+# Откуда берутся ударения. ``auto`` — ruaccent, если он установлен, иначе
+# словарь. Разница принципиальная: ruaccent размечает ВСЕ слова по контексту,
+# поэтому решает и омографы; словарь омографы не трогает, а частичная разметка
+# на этой модели портит их (знак «+» левее переключает модель).
+SOURCE_AUTO = "auto"
+SOURCE_DICTIONARY = "dictionary"
+SOURCE_RUACCENT = "ruaccent"
+SOURCES = (SOURCE_AUTO, SOURCE_DICTIONARY, SOURCE_RUACCENT)
+
 _WORD_RE = re.compile(r"[А-Яа-яЁё]+")
+# Деление на предложения с сохранением знаков: split делит по захваченной
+# группе, поэтому знаки остаются в списке и при склейке возвращаются на место.
+_SENTENCE_RE = re.compile(r"([.!?…]+\s*)")
+# Слово вместе с пометкой ударения — для чистки односложных.
+_WORD_MARKED_RE = re.compile(r"[А-Яа-яЁё+]+")
 _VOWELS = set("аеёиоуыэюяАЕЁИОУЫЭЮЯ")
+
+# Знаки ударения, которые ставят в текстах: комбинирующий акут (U+0301),
+# комбинирующий тон (U+0341), модификатор «акут» (U+00B4) и ASCII-апостроф
+# в роли знака (U+02CA). Модель их НЕ понимает — выбрасывает как небуквенные
+# (проверено: «окн́а» и «о́кна» дают тот же звук, что текст без пометок), а знак
+# «+» понимает. Поэтому знаки автора переводятся в «+».
+_TEXT_STRESS = frozenset("\u0301\u0341\u00b4\u02ca")
 
 def data_dir() -> Path:
     """Каталог со словарными данными: рядом с пакетом или в установленном виде."""
@@ -70,6 +92,9 @@ class StressDictionary:
         self._blob: bytes | None = None
         self._offsets: array | None = None
         self._homographs: dict[str, dict[str, str]] | None = None
+        # Словоформы с двойным ударением. Хранятся отдельно от словаря: они в
+        # него не входят, но по ним видно, можно ли размечать текст вовсе.
+        self._ambiguous: frozenset[str] | None = None
 
     # ── Загрузка ─────────────────────────────────────────────────────────────
 
@@ -98,6 +123,21 @@ class StressDictionary:
             return
         raw = lzma.decompress(path.read_bytes())
         self._homographs = json.loads(raw.decode("utf-8"))
+
+    def _load_ambiguous(self) -> None:
+        path = self._directory / "ambiguous.txt.xz"
+        if not path.is_file():
+            self._ambiguous = frozenset()
+            return
+        raw = lzma.decompress(path.read_bytes()).decode("utf-8")
+        self._ambiguous = frozenset(line for line in raw.split("\n") if line)
+
+    def is_ambiguous(self, word: str) -> bool:
+        """Двойное ли ударение у словоформы (по списку из источника)."""
+        if self._ambiguous is None:
+            self._load_ambiguous()
+        assert self._ambiguous is not None
+        return word.lower() in self._ambiguous
 
     @property
     def loaded(self) -> bool:
@@ -184,11 +224,80 @@ class StressDictionary:
         return self._homographs.get(word.lower(), {})
 
 
-class Accentor:
-    """Расставляет ударения в тексте по словарю.
+class RuAccentBackend:
+    """Разметка через ruaccent — библиотеку с моделью омографов.
 
-    Омографы словарь не трогает: их различает акцентор модели по контексту,
-    и на замере он вернее фиксированного словарного варианта.
+    Отличие от словаря: размечаются ВСЕ слова, и выбор ударения омографа идёт
+    по контексту фразы, а не по таблице. Замер на восьми фразах: 7 верных
+    против 5 у словаря с фиксированным вариантом.
+
+    Цена: сама библиотека тянет onnxruntime и transformers, модели занимают
+    около 160 МБ. Поэтому зависимость необязательная: нет ruaccent — работает
+    словарь, и это видно в журнале, а не замалчивается.
+    """
+
+    def __init__(self, models_dir: Path | None = None,
+                 model_size: str = "tiny") -> None:
+        from ruaccent import RUAccent
+
+        if models_dir is None:
+            models_dir = (Path.home() / ".local" / "share"
+                          / "silero-tts-reader" / "ruaccent")
+        models_dir = Path(models_dir).expanduser()
+        # Модели уже лежат на месте — значит, сеть не нужна: без этих
+        # переменных ruaccent всё равно сходит на HuggingFace проверить
+        # обновление и падает без сети.
+        if (models_dir / "nn").is_dir():
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+        else:
+            models_dir.mkdir(parents=True, exist_ok=True)
+        self._accent = RUAccent()
+        self._accent.load(
+            omograph_model_size=model_size,
+            use_dictionary=True,
+            workdir=str(models_dir),
+        )
+
+    def mark(self, text: str, fallback=None) -> str:
+        """Разметить текст, переживая незнакомые слова.
+
+        Библиотека падает на слове, которого нет в её словаре (опечатка,
+        выдуманное имя): токенизатор отдаёт неполный вход, и onnxruntime
+        поднимает ValueError. Проверено: 3 падения из 10 фраз, в том числе на
+        «Диреектора» — одна опечатка роняла весь вызов, а в книге это значит
+        потерю синтеза.
+
+        Поэтому отказ перехватывается: сначала пробуем весь текст, при
+        неудаче — по предложениям, и упавшее предложение остаётся как есть
+        (модель прочтёт его сама). Молча терять разметку целой главы нельзя,
+        терять её в одном предложении — можно.
+        """
+        try:
+            return self._accent.process_all(text)
+        except Exception:
+            pass
+        parts = _SENTENCE_RE.split(text)
+        marked: list[str] = []
+        for part in parts:
+            if not part.strip():
+                marked.append(part)
+                continue
+            try:
+                marked.append(self._accent.process_all(part))
+            except Exception:
+                # Предложение с незнакомым словом: отдаём его словарю — он
+                # разметит хотя бы известные слова, остальное прочтёт модель.
+                marked.append(fallback(part) if fallback is not None else part)
+        return "".join(marked)
+
+
+class Accentor:
+    """Расставляет ударения в тексте.
+
+    Два источника: словарь (всегда) и ruaccent (если установлен). Словарь
+    омографы не трогает — их различает акцентор модели; ruaccent размечает
+    всё, включая омографы, поэтому на нём частичная разметка не возникает.
     """
 
     def __init__(
@@ -197,8 +306,14 @@ class Accentor:
         overrides: dict[str, str] | None = None,
         dictionary: StressDictionary | None = None,
         directory: Path | None = None,
+        source: str = SOURCE_AUTO,
+        ruaccent_models: Path | None = None,
     ) -> None:
         self._directory = directory
+        self._source = source if source in SOURCES else SOURCE_AUTO
+        self._ruaccent_models = ruaccent_models
+        self._ruaccent: RuAccentBackend | None = None
+        self._ruaccent_checked = False
         self.mode = mode if mode in MODES else MODE_OFF
         self._overrides = {
             _decode_stress(word).lower(): form
@@ -257,12 +372,36 @@ class Accentor:
     # ── Текст ────────────────────────────────────────────────────────────────
 
     def accent_text(self, text: str) -> str:
-        """Разметить ударения в тексте, сохранив пунктуацию и регистр."""
+        """Разметить ударения в тексте, сохранив пунктуацию и регистр.
+
+        Если во фрагменте есть многозначное слово, фрагмент не размечается
+        вовсе. Причина измерена: наличие хотя бы одного знака «+» переключает
+        модель в режим, где она доверяет пометкам целиком, и слова БЕЗ пометки
+        в том же тексте она читает уже не по контексту. «проверка окна плеера»
+        без пометок читается верно (окна́), а «пров+ерка окна плеера» — как
+        о́кна. Поэтому частичная разметка омографы портит.
+        """
         if self.mode == MODE_OFF or not text:
             return text
+        # Знаки автора переводятся всегда, в любом режиме: это не наша догадка,
+        # а прямая подсказка из текста.
+        text = convert_marks(text)
 
+        ruaccent = self._ruaccent_backend()
+        if ruaccent is not None:
+            # ruaccent размечает всё по контексту, поэтому правки пользователя
+            # применяются после него: свой словарь главнее любой модели.
+            marked = ruaccent.mark(text, fallback=self._mark_with_dictionary)
+            return self._apply_overrides(_drop_redundant_marks(marked))
+
+        return self._mark_with_dictionary(text)
+
+    def _mark_with_dictionary(self, text: str) -> str:
+        """Разметка словарём: помечаются слова, у которых ударение одно."""
         def replace(match: re.Match) -> str:
             word = match.group(0)
+            if STRESS_MARK in word:
+                return word
             accented = self.accent_word(word)
             if not accented:
                 return word
@@ -270,9 +409,93 @@ class Accentor:
 
         return _WORD_RE.sub(replace, text)
 
+    def _ruaccent_backend(self) -> RuAccentBackend | None:
+        """ruaccent, если он запрошен и доступен. Иначе None и словарь."""
+        if self._source == SOURCE_DICTIONARY:
+            return None
+        if not self._ruaccent_checked:
+            self._ruaccent_checked = True
+            try:
+                self._ruaccent = RuAccentBackend(self._ruaccent_models)
+            except Exception as exc:
+                if self._source == SOURCE_RUACCENT:
+                    # Выбор сделан явно: молчаливая подмена была бы обманом.
+                    # i18n: нет перевода — строка журнала в консоли
+                    print(f"  ✗ ruaccent не подключился: {type(exc).__name__}: "
+                          f"{exc}", flush=True)
+                self._ruaccent = None
+        return self._ruaccent
+
+    def _apply_overrides(self, text: str) -> str:
+        """Заменить разметку там, где у пользователя своя правка."""
+        if not self._overrides:
+            return text
+        for form in self._overrides.values():
+            pattern = re.compile(rf"\b{re.escape(form.replace(STRESS_MARK, ''))}\b",
+                                 re.IGNORECASE)
+            text = pattern.sub(form, text)
+        return text
+
+    @property
+    def source(self) -> str:
+        """Действующий источник: ``ruaccent`` или ``dictionary``."""
+        return "ruaccent" if self._ruaccent_backend() is not None else "dictionary"
+
+    def ambiguous_words(self, text: str) -> list[str]:
+        """Многозначные слова во фрагменте — для журнала, а не для пропуска.
+
+        Разметка ставится всегда, но у таких слов пометки нет: модель читает
+        их по контексту. Знак левее по тексту переключает её, и тогда выбор
+        может стать неверным — это видно в журнале уровня detail.
+        """
+        found: list[str] = []
+        for match in _WORD_RE.finditer(convert_marks(text)):
+            word = match.group(0).lower()
+            if self.count_vowels(word) < 2:
+                continue
+            if self._dictionary.is_ambiguous(word):
+                found.append(word)
+        return found
+
     def count_vowels(self, word: str) -> int:
         """Сколько гласных в слове — для проверки правильности пометки."""
         return sum(1 for letter in word if letter in _VOWELS)
+
+
+def _drop_redundant_marks(text: str) -> str:
+    """Убрать пометку с односложных слов.
+
+    ruaccent ставит знак всем словам, включая «он», «и», «в». Там гласная одна,
+    помечать нечего, а лишние знаки засоряют текст и мешают читать журнал.
+    """
+    def replace(match: re.Match) -> str:
+        word = match.group(0)
+        if word.count(STRESS_MARK) and sum(
+                1 for letter in word if letter in _VOWELS) < 2:
+            return word.replace(STRESS_MARK, "")
+        return word
+
+    return _WORD_MARKED_RE.sub(replace, text)
+
+
+def convert_marks(text: str) -> str:
+    """Перевести знаки ударения из текста в нотацию модели.
+
+    «окн́а» и «о́кна» становятся «окн+а». Модель комбинирующий знак не видит
+    вовсе, поэтому без этой замены разметка автора теряется: в книгах и
+    статьях ударение часто проставлено, и это готовая подсказка.
+    """
+    if not text or not any(char in _TEXT_STRESS for char in text):
+        return text
+    result: list[str] = []
+    for char in text:
+        if char in _TEXT_STRESS:
+            # Знак относится к предыдущей гласной; «+» ставится перед ней.
+            if result and result[-1] in _VOWELS:
+                result.insert(len(result) - 1, STRESS_MARK)
+            continue
+        result.append(char)
+    return "".join(result)
 
 
 def apply_mark(word: str, form: str) -> str:

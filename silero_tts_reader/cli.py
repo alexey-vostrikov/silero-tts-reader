@@ -129,9 +129,20 @@ def main(argv: list[str] | None = None) -> int:
               "sudo apt install python3-torch python3-numpy").format(module=exc.name)
         )
 
+    from .core.accent import load_overrides
     from .core.tts_engine import TTSEngine, TTSLoadError
 
-    engine = TTSEngine(sample_rate=config.sample_rate, models=models)
+    # Те же настройки, что у приложения: иначе через CLI (и значит через
+    # speech-dispatcher) словарь ударений и сокращения молча не работают,
+    # хотя в настройках включены.
+    engine = TTSEngine(
+        sample_rate=config.sample_rate,
+        models=models,
+        accent_mode=config.stress_dict,
+        accent_overrides=load_overrides(config.stress_file),
+        abbreviations=config.abbreviations,
+        stress_source=config.stress_source,
+    )
 
     # --lang важнее конфига; auto означает «решить по тексту».
     requested = args.lang or (None if config.language == "auto" else config.language)

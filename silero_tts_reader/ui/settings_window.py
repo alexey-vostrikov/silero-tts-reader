@@ -683,6 +683,31 @@ class SettingsWindow(Gtk.Dialog):
         ))
         speech_box.append(stress_row)
 
+        source_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        source_row.append(self._label(_("Источник ударений:")))
+        self._stress_source_combo = Gtk.ComboBoxText()
+        for value, title in (
+            ("auto", _("ruaccent, если установлен")),
+            ("dictionary", _("Только словарь")),
+            ("ruaccent", _("Только ruaccent")),
+        ):
+            self._stress_source_combo.append(value, title)
+        self._stress_source_combo.set_active_id(self._config.stress_source)
+        self._stress_source_combo.connect(
+            "changed",
+            lambda combo: self._pending.update(
+                {"stress_source": combo.get_active_id() or "auto"}
+            ),
+        )
+        source_row.append(self._stress_source_combo)
+        source_row.set_tooltip_text(_(
+            "ruaccent размечает все слова по контексту и решает омографы "
+            "(«окна» и «окна́»), но требует отдельной установки и 160 МБ "
+            "моделей. Словарь работает всегда, однако омографы оставляет "
+            "акцентору модели."
+        ))
+        speech_box.append(source_row)
+
         abbrev_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         abbrev_row.append(self._label(_("Сокращения:")))
         self._abbrev_combo = Gtk.ComboBoxText()
@@ -1270,7 +1295,8 @@ class SettingsWindow(Gtk.Dialog):
                 self._config.set_speaker(str(language), str(voice))
 
         for key in ("speed", "theme", "use_system_accent", "window_positioning",
-                    "log_level", "stress_dict", "abbreviations"):
+                    "log_level", "stress_dict", "abbreviations",
+                    "stress_source"):
             if key in self._pending:
                 setattr(self._config, key, self._pending[key])
 

@@ -47,6 +47,7 @@ class TTSEngine:
         accent_mode: str = "off",
         accent_overrides: dict[str, str] | None = None,
         abbreviations: str = "off",
+        stress_source: str = "auto",
     ) -> None:
         self._sample_rate = sample_rate
         # Ударения по словарю только для русского: словарь русский, а
@@ -54,6 +55,7 @@ class TTSEngine:
         self._accent_mode = accent_mode
         self._accent_overrides = accent_overrides or {}
         self._accentor = None
+        self._stress_source = stress_source
         self._abbrev_mode = abbreviations
         self._abbrev = None
         self._paths: dict[str, Path] = {}
@@ -337,7 +339,18 @@ class TTSEngine:
             from .accent import Accentor
 
             self._accentor = Accentor(
-                mode=self._accent_mode, overrides=self._accent_overrides)
+                mode=self._accent_mode,
+                overrides=self._accent_overrides,
+                source=self._stress_source,
+            )
+        # Многозначные слова видны в журнале: у них пометки нет, и решает
+        # акцентор модели. Без этой строки неверное ударение омографа
+        # выглядит как ошибка словаря.
+        ambiguous = self._accentor.ambiguous_words(text)
+        if ambiguous:
+            log.detail(
+                f"[TTSEngine] ударение по смыслу, словарь не трогает: "
+                f"{', '.join(sorted(set(ambiguous)))}")
         return self._accentor.accent_text(text)
 
     @staticmethod

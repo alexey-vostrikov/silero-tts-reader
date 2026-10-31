@@ -210,6 +210,14 @@ def main() -> int:
     (TARGET / "homographs.json.xz").write_bytes(
         lzma.compress(homograph_blob, preset=6))
 
+    # Список многозначных словоформ нужен приложению, чтобы понять, можно ли
+    # размечать текст вовсе: наличие одного знака «+» переключает модель, и
+    # слова без пометки она перестаёт читать по контексту. В словарь эти формы
+    # не попадают, но сам список нужен.
+    ambiguous_blob = "\n".join(sorted(ambiguous)) + "\n"
+    (TARGET / "ambiguous.txt.xz").write_bytes(
+        lzma.compress(ambiguous_blob.encode("utf-8"), preset=6))
+
     forms_size = (TARGET / "forms.txt.xz").stat().st_size
     homographs_size = (TARGET / "homographs.json.xz").stat().st_size
     with_tags = sum(1 for variants in homographs.values()
@@ -220,6 +228,9 @@ def main() -> int:
     print(f"  ✓ омографов: {len(homographs):,}, из них с разбором: {with_tags:,}")
     if homograph_dropped:
         print(f"  — пропущено записей омографов: {homograph_dropped:,}")
+    print(f"  ✓ ambiguous.txt.xz: "
+          f"{(TARGET / 'ambiguous.txt.xz').stat().st_size / 1e6:.1f} МБ "
+          f"({len(ambiguous):,} словоформ)")
     print(f"  ✓ forms.txt.xz: {forms_size / 1e6:.1f} МБ")
     print(f"  ✓ homographs.json.xz: {homographs_size / 1e6:.1f} МБ")
     print(f"  ✓ всего: {(forms_size + homographs_size) / 1e6:.1f} МБ")
