@@ -195,18 +195,18 @@ path.unlink()
 print("16. В модуле нет нейросетей")
 module_source = (ROOT / "silero_tts_reader" / "core" / "accent.py").read_text(
     encoding="utf-8")
-# Базовый путь не тянет нейросети: словарь — это данные. ruaccent
-# поддерживается, но только как необязательный и импортируется внутри класса,
-# иначе приложение требовало бы onnxruntime у всех.
-for forbidden in ("import torch", "from torch", "silero_stress", "numpy",
-                  "import onnxruntime"):
+# Базовый путь не тянет нейросети: словарь — это данные. Оба акцентора —
+# Silero Stress и ruaccent — поддерживаются, но только как необязательные:
+# импорт внутри класса, а не в начале модуля, иначе приложение требовало бы
+# torch и onnxruntime у всех.
+for forbidden in ("import torch", "from torch", "numpy", "import onnxruntime"):
     check(f"нет обязательной зависимости «{forbidden}»",
           forbidden not in module_source)
 module_lines = module_source.splitlines()
 top_level_import = [line for line in module_lines
                     if line.startswith(("import ", "from "))
-                    and "ruaccent" in line]
-check("ruaccent не импортируется на уровне модуля", not top_level_import,
+                    and ("ruaccent" in line or "silero_stress" in line)]
+check("акценторы не импортируются на уровне модуля", not top_level_import,
       str(top_level_import))
 
 print("18. Омографы не разрешаются словарём вовсе")
