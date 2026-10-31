@@ -4,6 +4,7 @@
     silero-tts-speechd status     # подключён ли модуль
     silero-tts-speechd enable     # добавить строку AddModule (нужен root)
     silero-tts-speechd disable    # убрать её (нужен root)
+    silero-tts-speechd voices     # сколько голосов видит демон и почему
 
 Правка /etc/speech-dispatcher/speechd.conf делается одним блоком с маркерами,
 поэтому повторный запуск ничего не дублирует, а `disable` убирает ровно то, что
@@ -14,6 +15,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import subprocess
 import sys
 
 SPEECHD_CONF = "/etc/speech-dispatcher/speechd.conf"
@@ -38,7 +40,7 @@ def read_conf() -> str:
         with open(SPEECHD_CONF, encoding="utf-8") as handle:
             return handle.read()
     except OSError as exc:
-        raise SystemExit(die(f"не читается {SPEECHD_CONF}: {exc}"))
+        raise SystemExit(die(f"не читается {SPEECHD_CONF}: {exc}")) from exc
 
 
 def is_enabled(text: str) -> bool:
@@ -56,16 +58,216 @@ def write_conf(text: str) -> None:
     os.replace(tmp, SPEECHD_CONF)
 
 
+def user_environment() -> dict[str, str]:
+    """Окружение сессии того, кто вызвал sudo.
+
+    Без ``XDG_RUNTIME_DIR`` клиент ``spd-say`` не находит демон пользователя и
+    поднимает собственный — с конфигом по умолчанию и голосами espeak-ng.
+    Диагностика после этого врёт: показывает 14 806 голосов там, где их 12.
+    """
+    environment = dict(os.environ)
+    user = environment.get("SUDO_USER")
+    if user and not environment.get("XDG_RUNTIME_DIR"):
+        environment["XDG_RUNTIME_DIR"] = f"/run/user/{_uid_of(user)}"
+    return environment
+
+
+def run_spd_say(*args: str) -> list[str]:
+    """Вызвать spd-say в правильном окружении и вернуть строки вывода."""
+    try:
+        result = subprocess.run(
+            ["spd-say", *args], capture_output=True, text=True, timeout=20,
+            env=user_environment())
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return result.stdout.splitlines()
+
+
+def list_voices() -> list[str]:
+    """Голоса, которые видит работающий speech-dispatcher."""
+    return run_spd_say("-L")
+
+
+def has_our_voices(lines: list[str]) -> bool:
+    """Есть ли в списке хоть один голос Silero."""
+    return any("xenia" in line.lower() or "aidar" in line.lower() for line in lines)
+
+
+def parse_voices(lines: list[str]) -> dict[str, int]:
+    """Голоса по языкам из вывода ``spd-say -L``.
+
+    Строка — три колонки: имя голоса, код языка, вариант. Заголовок пропускаем.
+    """
+    counts: dict[str, int] = {}
+    for line in lines:
+        # Имя голоса бывает с пробелами, поэтому режем с конца: последняя
+        # колонка — вариант, перед ней — код языка.
+        parts = line.rsplit(None, 2)
+        if len(parts) < 3 or parts[-2] == "LANGUAGE":
+            continue
+        code = parts[-2]
+        # Язык — короткий латинский код (ru, en, en-US), а не «(America)».
+        if not re.fullmatch(r"[a-z]{2,3}(?:[-_][A-Za-z]{2,4})?", code):
+            continue
+        counts[code] = counts.get(code, 0) + 1
+    return counts
+
+
+def module_languages(conf_text: str) -> set[str]:
+    """Языки, объявленные в конфиге модуля (GenericLanguage и AddVoice)."""
+    found: set[str] = set()
+    for line in conf_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        for keyword in ("GenericLanguage", "AddVoice"):
+            if stripped.startswith(keyword):
+                quoted = re.findall(r'"([^"]*)"', stripped)
+                if quoted:
+                    found.add(quoted[0])
+    return found
+
+
+def explain_voices(
+    modules: list[str],
+    counts: dict[str, int],
+    our_languages: set[str],
+    enabled: bool,
+) -> tuple[list[str], bool]:
+    """Объяснить состав списка голосов. Возвращает строки и признак «всё хорошо».
+
+    Список голосов собирается по модулям, которые демон поднял. Если в
+    конфиге нет ни одного AddModule, speech-dispatcher поднимает встроенный
+    espeak-ng и отдаёт его голоса: около 14 800 строк и тысячи языков. Именно
+    это и выглядит как «откуда столько голосов».
+    """
+    report: list[str] = []
+    foreign = sorted(set(counts) - our_languages)
+    total = sum(counts.values())
+
+    report.append(f"активные модули: {', '.join(modules) if modules else 'нет'}")
+    report.append(f"голосов в списке: {total}, языков: {len(counts)}")
+    if counts:
+        languages = ", ".join(f"{code} ({number})"
+                              for code, number in sorted(counts.items())[:12])
+        report.append(f"языки: {languages}"
+                      + (" …" if len(counts) > 12 else ""))
+
+    if not modules:
+        report.append(
+            "причина: демон не запущен или не отвечает — список получить не у кого")
+        return report, False
+
+    if "espeak-ng" in modules and not enabled:
+        report.append(
+            "причина: в speechd.conf нет ни одного AddModule, поэтому демон "
+            "поднял встроенный espeak-ng со всеми своими голосами")
+        report.append("что делать: sudo silero-tts-speechd enable")
+        return report, False
+
+    if enabled and "silero-tts" not in modules:
+        report.append(
+            "причина: модуль включён в конфиге, но демон его не видит — он "
+            "разбирает конфиг при запуске и с тех пор не перезапускался")
+        report.append(
+            "что делать: systemctl --user restart speech-dispatcher")
+        return report, False
+
+    if foreign:
+        report.append(f"лишние языки: {', '.join(foreign)}")
+        report.append(
+            "причина: их объявляют другие подключённые модули — закомментируйте "
+            "их AddModule в speechd.conf и перезапустите демон")
+        return report, False
+
+    report.append("лишних языков нет: в списке только голоса нашего модуля")
+    return report, True
+
+
+def cmd_voices() -> int:
+    """Показать состав списка голосов и причину появления лишних языков."""
+    our_conf = ""
+    if os.path.exists(MODULE_CONF):
+        with open(MODULE_CONF, encoding="utf-8") as handle:
+            our_conf = handle.read()
+    languages = module_languages(our_conf)
+
+    modules = [line.strip() for line in run_spd_say("-O")
+               if line.strip() and not line.startswith("OUTPUT")]
+
+    lines = list_voices()
+    counts = parse_voices(lines)
+    if lines and len(counts) and sum(counts.values()) < len(lines) - 1:
+        # Часть строк espeak-ng печатает без разделителя между языком и
+        # вариантом — такие не разобрать, и считать их не нужно. Молчать об
+        # этом нельзя: иначе сумма не сойдётся с числом строк.
+        skipped = len(lines) - 1 - sum(counts.values())
+        print(f"строк в списке: {len(lines) - 1}, распознано голосов: "
+              f"{sum(counts.values())}, не разобрано: {skipped}")
+
+    report, ok = explain_voices(modules, counts, languages,
+                                is_enabled(read_conf()))
+    for line in report:
+        print(line)
+    return 0 if ok else 1
+
+
+def restart_daemon() -> bool:
+    """Перезапустить демон в сессии того, кто вызвал sudo.
+
+    Без перезапуска демон не видит новый AddModule: он держит разобранный
+    конфиг с момента запуска, а `spd-say -L` продолжает показывать голоса
+    чужого модуля (у espeak-ng их полторы тысячи строк).
+    """
+    user = os.environ.get("SUDO_USER")
+    command = ["systemctl", "--user", "restart", "speech-dispatcher"]
+    if user:
+        # sudo теряет сессионную шину: возвращаем её через XDG_RUNTIME_DIR.
+        runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{_uid_of(user)}"
+        command = ["sudo", "-u", user, "env",
+                   f"XDG_RUNTIME_DIR={runtime}", *command]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
+def _uid_of(user: str) -> int:
+    """Числовой uid: по нему собирается путь к сессионной шине."""
+    try:
+        result = subprocess.run(["id", "-u", user], capture_output=True,
+                                text=True, timeout=5)
+        return int(result.stdout.strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 1000
+
+
 def cmd_status() -> int:
     text = read_conf()
     enabled = is_enabled(text)
     print(f"конфиг модуля: {MODULE_CONF} — {'есть' if os.path.exists(MODULE_CONF) else 'ОТСУТСТВУЕТ'}")
     print(f"speechd.conf:  {'модуль подключён' if enabled else 'модуль НЕ подключён'}")
-    if enabled:
-        print("проверка: spd-say -O | grep silero-tts")
-    else:
+    if not enabled:
         print("включить:  sudo silero-tts-speechd enable")
-    return 0 if enabled else 1
+        return 1
+
+    voices = list_voices()
+    if not voices:
+        print("список голосов получить не удалось: нет spd-say или демона")
+        return 1
+    if has_our_voices(voices):
+        ours = sum(1 for line in voices
+                   if "xenia" in line.lower() or "aidar" in line.lower())
+        print(f"голоса Silero видны демону: {len(voices) - 1} строк, из них наших "
+              f"не меньше {ours}")
+        return 0
+    print("конфиг подключён, но демон его не видит: он разбирает конфиг при "
+          "запуске и с тех пор не перезапускался.")
+    print(f"сейчас spd-say -L показывает {max(0, len(voices) - 1)} голосов "
+          f"чужого модуля.")
+    print("перезапустите демон:  systemctl --user restart speech-dispatcher")
+    return 1
 
 
 def cmd_enable() -> int:
@@ -90,7 +292,13 @@ def cmd_enable() -> int:
     write_conf(text)
     print(f"готово: модуль подключён ({SPEECHD_CONF})")
     print("резервная копия:", BACKUP)
-    print("проверка: spd-say -O | grep silero-tts")
+    # Демон держит конфиг с момента запуска: без перезапуска он продолжит
+    # показывать голоса прежнего модуля, и покажется, что ничего не вышло.
+    if restart_daemon():
+        print("демон speech-dispatcher перезапущен")
+    else:
+        print("перезапустите демон вручную:  systemctl --user restart speech-dispatcher")
+    print("проверка: silero-tts-speechd status")
     print("сказать:  spd-say -o silero-tts -l ru \"Проверка синтеза\"")
     return 0
 
@@ -108,17 +316,27 @@ def cmd_disable() -> int:
     )
     write_conf(text)
     print("модуль отключён")
+    if restart_daemon():
+        print("демон speech-dispatcher перезапущен")
+    else:
+        print("перезапустите демон вручную:  systemctl --user restart speech-dispatcher")
     return 0
 
 
 def main(argv: list[str]) -> int:
     command = argv[1] if len(argv) > 1 else "status"
-    actions = {"status": cmd_status, "enable": cmd_enable, "disable": cmd_disable}
+    actions = {
+        "status": cmd_status,
+        "enable": cmd_enable,
+        "disable": cmd_disable,
+        "voices": cmd_voices,
+    }
     if command in ("-h", "--help", "help"):
         print(__doc__.strip())
         return 0
     if command not in actions:
-        return die(f"неизвестная команда: {command} (status|enable|disable)")
+        return die(f"неизвестная команда: {command} "
+                   f"(status|enable|disable|voices)")
     return actions[command]()
 
 
