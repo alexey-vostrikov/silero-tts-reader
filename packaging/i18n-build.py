@@ -298,6 +298,10 @@ TRANSLATIONS = {
         "(«окна» and «окна́»), but needs a separate install and 160 MB of "
         "models. The dictionary always works, yet leaves homographs to the "
         "model accentor.",
+    "Предыдущая фраза или её начало": "Previous sentence or its start",
+    "Середина прошлой фразы, её начало или −5 секунд":
+        "Middle of previous sentence, its start, or −5 seconds",
+    "Следующая фраза или +5 секунд": "Next sentence or +5 seconds",
     "Сокращения:": "Abbreviations:",
     "Известные и сокращения с точкой": "Known ones and dotted forms",
     "Все заглавные — по буквам": "All capitals letter by letter",

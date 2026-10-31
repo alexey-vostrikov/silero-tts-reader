@@ -90,6 +90,7 @@ class Application(Gtk.Application):
             accent_mode=self._config.stress_dict,
             accent_overrides=load_overrides(self._config.stress_file),
             abbreviations=self._config.abbreviations,
+            stress_source=self._config.stress_source,
         )
         self._hotkey_listener = HotkeyListener()
         self._stop_event = threading.Event()
@@ -461,6 +462,8 @@ class Application(Gtk.Application):
         w.on_pause_resume = self._toggle_pause
         w.on_stop = self._stop_playback
         w.on_speed_changed = self._on_speed_changed
+        w.on_previous = self._on_previous_quant
+        w.on_next = self._on_next_quant
         w.on_rewind = self._on_rewind_playback
         w.on_seek_fraction = self._on_seek_fraction_playback
 
@@ -649,6 +652,16 @@ class Application(Gtk.Application):
             self._player.resume()
         else:
             self._player.pause()
+
+    def _on_previous_quant(self) -> None:
+        """Предыдущая фраза: если текущая почти не звучала — шаг назад."""
+        if self._player and self._player.is_alive():
+            self._player.previous_quant()
+
+    def _on_next_quant(self) -> None:
+        """Следующая фраза: если до конца текущей мало — сразу переходим."""
+        if self._player and self._player.is_alive():
+            self._player.next_quant()
 
     def _on_rewind_playback(self, seconds: float) -> None:
         if self._player and self._player.is_alive():
