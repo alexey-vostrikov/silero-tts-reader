@@ -23,7 +23,7 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
-from ..core.audio_player import SPEED_AVAILABLE  # noqa: E402
+from ..core.audio_player import SEEK_STEP, SPEED_AVAILABLE  # noqa: E402
 from ..i18n import _  # noqa: E402
 from . import layer_shell, window_placement  # noqa: E402
 from .css_scope import scope_css  # noqa: E402
@@ -247,6 +247,11 @@ class PlaybackWidget(Gtk.ApplicationWindow):
         self.on_stop: Callable[[], None] | None = None
         self.on_speed_changed: Callable[[float], None] | None = None
         self.on_rewind: Callable[[float], None] | None = None
+        # Кнопка «предыдущий квант»: решение принимает плеер, ему известна
+        # проигранная доля фразы.
+        self.on_previous: Callable[[], None] | None = None
+        # Кнопка «следующий квант»: правило симметрично предыдущей.
+        self.on_next: Callable[[], None] | None = None
         self.on_seek_fraction: Callable[[float], None] | None = None
 
         self._is_dark = True
@@ -340,9 +345,9 @@ class PlaybackWidget(Gtk.ApplicationWindow):
         self._btn_open.connect("clicked", lambda _b: self._on_open_clicked())
         top_row.append(self._btn_open)
 
-        self._btn_rewind = self._make_button("◀◀", _("Назад на 5 секунд"),
+        self._btn_rewind = self._make_button("◀◀", _("Середина прошлой фразы, её начало или −5 секунд"),
                                              "playback-neutral")
-        self._btn_rewind.connect("clicked", lambda _b: self._emit_rewind(-5.0))
+        self._btn_rewind.connect("clicked", lambda _b: self._emit_previous())
         top_row.append(self._btn_rewind)
 
         self._btn_pause = Gtk.Button()
@@ -356,9 +361,9 @@ class PlaybackWidget(Gtk.ApplicationWindow):
         self._btn_pause.connect("clicked", lambda _b: self._on_pause_resume_clicked())
         top_row.append(self._btn_pause)
 
-        self._btn_forward = self._make_button("▶▶", _("Вперёд на 5 секунд"),
+        self._btn_forward = self._make_button("▶▶", _("Следующая фраза или +5 секунд"),
                                               "playback-neutral")
-        self._btn_forward.connect("clicked", lambda _b: self._emit_rewind(5.0))
+        self._btn_forward.connect("clicked", lambda _b: self._emit_next())
         top_row.append(self._btn_forward)
 
         self._btn_stop = self._make_button(STOP_GLYPH, _("Остановить"),
@@ -836,6 +841,21 @@ class PlaybackWidget(Gtk.ApplicationWindow):
         self.schedule_hide(150)
         if self.on_stop:
             self.on_stop()
+
+    def _emit_next(self) -> None:
+        """Перейти к следующей фразе или перемотать вперёд."""
+        if self.on_next:
+            self.on_next()
+        else:
+            self._emit_rewind(SEEK_STEP)
+
+    def _emit_previous(self) -> None:
+        """Вернуться к предыдущей фразе или начать текущую заново."""
+        if self.on_previous:
+            self.on_previous()
+        else:
+            # Запасной путь: без обработчика ведём себя как раньше.
+            self._emit_rewind(-SEEK_STEP)
 
     def _emit_rewind(self, seconds: float) -> None:
         if self.on_rewind:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import queue
 import threading
+from collections import deque
 from collections.abc import Callable
 
 import numpy as np
@@ -20,6 +21,54 @@ SPEED_AVAILABLE = _SPEED_AVAILABLE
 # роль играл разрыв от переоткрытия аудиоустройства на каждый квант — он выходил
 # около полутора секунд и звучал как пауза после дефиса в начале реплики.
 SEGMENT_GAP_MS = 180
+
+# Кнопки перемотки по фразам. Границы заданы в секундах, а не в долях:
+# человек слышит время, а не проценты, и «две секунды» понятнее, чем «5 %».
+# Внутри одного кванта 2 с — это самое начало фразы, 5 с — уже середина.
+PREVIOUS_JUMP_SECONDS = 2.0     # меньше — уходим к середине прошлой фразы
+RESTART_SECONDS = 5.0           # меньше — начинаем текущую фразу заново
+NEXT_JUMP_SECONDS = 7.0         # меньше осталось — переходим к следующей фразе
+SEEK_STEP = 5.0                 # обычный шаг перемотки внутри фразы
+
+# Где начинать повтор предыдущей фразы: середина.
+PREVIOUS_START_FRACTION = 0.5
+
+# Сколько квантов помнить для возврата. Один квант — это фраза, обычно
+# 5–15 секунд звука; восемь дают возврат на несколько фраз назад и занимают
+# десятки мегабайт, а не сотни.
+HISTORY_DEPTH = 8
+
+ACTION_PREVIOUS = "previous"    # к середине предыдущей фразы
+ACTION_RESTART = "restart"      # к началу текущей
+ACTION_SEEK_BACK = "seek_back"  # на 5 секунд назад
+ACTION_NEXT = "next"            # к началу следующей
+ACTION_SEEK_FORWARD = "seek"    # на 5 секунд вперёд
+
+
+def previous_action(played_seconds: float, has_history: bool) -> str:
+    """Что делает «◀◀» через столько секунд после начала фразы.
+
+    Правило из трёх ступеней: совсем начало фразы (меньше 2 с) — вернуться к
+    середине предыдущей; до 5 с — услышать текущую с начала; дальше — обычная
+    перемотка на 5 секунд назад.
+    """
+    if played_seconds < PREVIOUS_JUMP_SECONDS and has_history:
+        return ACTION_PREVIOUS
+    if played_seconds < RESTART_SECONDS:
+        return ACTION_RESTART
+    return ACTION_SEEK_BACK
+
+
+def forward_action(remaining_seconds: float, has_next: bool) -> str:
+    """Что делает «▶▶» за столько секунд до конца фразы.
+
+    Симметрично «◀◀»: если до конца фразы меньше 7 секунд, переходим к началу
+    следующей, иначе перематываем вперёд на 5 секунд.
+    """
+    if remaining_seconds < NEXT_JUMP_SECONDS and has_next:
+        return ACTION_NEXT
+    return ACTION_SEEK_FORWARD
+
 
 _sounddevice = None
 
@@ -91,6 +140,17 @@ class AudioPlayer(threading.Thread):
 
         self._seek_request: float | None = None
         self._seek_fraction_request: float | None = None
+        # Возврат к предыдущему кванту: очередь расходуется по одному, поэтому
+        # сыгранное хранится отдельно, а повтор идёт мимо очереди.
+        self._history: deque[np.ndarray] = deque(maxlen=HISTORY_DEPTH)
+        self._pending: list[np.ndarray] = []
+        # Повтор фразы: массив и доля, с которой начинать (0.5 — середина).
+        self._replay: tuple[np.ndarray, float] | None = None
+        self._back_requested = False
+        self._next_requested = False
+        self._previous_request = False
+        self._forward_request = False
+        self._played_fraction = 0.0
 
         if speed != 1.0 and not SPEED_AVAILABLE:
             if on_speed_unavailable:
@@ -117,6 +177,20 @@ class AudioPlayer(threading.Thread):
         """Seek to a fraction (0.0 to 1.0) of current audio segment."""
         with self._speed_lock:
             self._seek_fraction_request = max(0.0, min(1.0, float(fraction)))
+
+    def previous_quant(self) -> None:
+        """Кнопка «предыдущий квант».
+
+        Решение принимает поток воспроизведения: ему известна проигранная доля
+        текущего кванта. Здесь только ставится запрос.
+        """
+        with self._speed_lock:
+            self._previous_request = True
+
+    def next_quant(self) -> None:
+        """Кнопка «следующий квант»: шаг вперёд по правилу forward_action."""
+        with self._speed_lock:
+            self._forward_request = True
 
     def pause(self) -> None:
         self._pause_event.clear()
@@ -166,16 +240,29 @@ class AudioPlayer(threading.Thread):
             dtype="float32",
         ) as stream:
             while not self._stop_event.is_set():
-                try:
-                    item = self._queue.get(timeout=0.2)
-                except queue.Empty:
-                    continue
+                # Порядок источников: отложенный квант, повтор из истории,
+                # затем очередь. Очередь расходуется по одному и обратно не
+                # отдаёт, поэтому возврат идёт через два своих списка.
+                start_fraction = 0.0
+                if self._replay is not None:
+                    # Возврат: этот квант играется немедленно, отложенный
+                    # (текущий) ждёт в pending до своего конца.
+                    raw, start_fraction = self._replay
+                    self._replay = None
+                elif self._pending:
+                    raw = self._pending.pop()
+                else:
+                    try:
+                        item = self._queue.get(timeout=0.2)
+                    except queue.Empty:
+                        continue
 
-                if TTSWorker.is_done_sentinel(item):
-                    break
+                    if TTSWorker.is_done_sentinel(item):
+                        break
 
-                audio: np.ndarray = item  # type: ignore[assignment]
+                    raw: np.ndarray = item  # type: ignore[assignment]
 
+                audio = raw
                 current_speed = self.speed
                 if current_speed != 1.0 and SPEED_AVAILABLE:
                     audio = self._stretch(audio, current_speed)
@@ -191,7 +278,21 @@ class AudioPlayer(threading.Thread):
                     self._write_gap(stream)
 
                 self._segment_index += 1
-                self._play_segment(audio, stream)
+                self._back_requested = False
+                self._next_requested = False
+                self._play_segment(audio, stream, start_fraction)
+                if self._next_requested:
+                    # Переход к следующей фразе: текущая остаётся в истории, но
+                    # в pending не идёт — её хвост пропускается намеренно.
+                    self._history.append(raw)
+                    first = False
+                    continue
+                if self._back_requested:
+                    # Текущий квант отложен: после повторного предыдущего он
+                    # должен прозвучать снова, поэтому пропускать его нельзя.
+                    self._pending.append(raw)
+                else:
+                    self._history.append(raw)
                 first = False
 
         if self._stop_event.is_set():
@@ -211,7 +312,8 @@ class AudioPlayer(threading.Thread):
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
-    def _play_segment(self, audio: np.ndarray, stream) -> None:
+    def _play_segment(self, audio: np.ndarray, stream,
+                      start_fraction: float = 0.0) -> None:
         """Проиграть один квант в уже открытый поток.
 
         Поток открывается один раз на всю сессию (см. run): переоткрытие
@@ -220,11 +322,46 @@ class AudioPlayer(threading.Thread):
         """
         chunk_size = int(self._sample_rate * 0.1)   # 100 ms chunks
         total_samples = len(audio)
-        pos = 0
+        pos = int(max(0.0, min(1.0, start_fraction)) * total_samples)
 
         while pos < total_samples and not self._stop_event.is_set():
             # Process pending seek request even if paused
             with self._speed_lock:
+                if self._previous_request:
+                    self._previous_request = False
+                    played = pos / self._sample_rate
+                    action = previous_action(played, bool(self._history))
+                    if action == ACTION_PREVIOUS:
+                        # К середине предыдущей фразы. Счётчик откатываем на
+                        # один: полоска не должна прыгнуть вперёд.
+                        self._replay = (self._history.pop(),
+                                        PREVIOUS_START_FRACTION)
+                        self._back_requested = True
+                        self._segment_index = max(0, self._segment_index - 1)
+                        self._played_fraction = 0.0
+                        return
+                    if action == ACTION_RESTART:
+                        pos = 0
+                    else:
+                        pos = max(0, pos - int(SEEK_STEP * self._sample_rate))
+                    self._played_fraction = pos / total_samples if total_samples else 0.0
+                    if self._on_segment_progress and total_samples > 0:
+                        self._on_segment_progress(self._overall(pos / total_samples))
+                    continue
+
+                if self._forward_request:
+                    self._forward_request = False
+                    remaining = (total_samples - pos) / self._sample_rate
+                    has_next = self._queue.qsize() > 0
+                    if forward_action(remaining, has_next) == ACTION_NEXT:
+                        # К началу следующей фразы: текущую не доигрываем.
+                        self._next_requested = True
+                        return
+                    pos = min(total_samples, pos + int(SEEK_STEP * self._sample_rate))
+                    self._played_fraction = pos / total_samples if total_samples else 0.0
+                    if self._on_segment_progress and total_samples > 0:
+                        self._on_segment_progress(self._overall(pos / total_samples))
+                    continue
                 if self._seek_request is not None:
                     delta_samples = int(self._seek_request * self._sample_rate)
                     pos = max(0, min(total_samples, pos + delta_samples))
@@ -250,6 +387,8 @@ class AudioPlayer(threading.Thread):
                 stream.write(chunk.reshape(-1, 1))
                 pos += len(chunk)
 
+            if total_samples > 0:
+                self._played_fraction = pos / total_samples
             if self._on_segment_progress and total_samples > 0:
                 self._on_segment_progress(self._overall(pos / total_samples))
 

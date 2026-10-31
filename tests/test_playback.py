@@ -78,6 +78,242 @@ def make_player(queue_, stop, **kwargs) -> AudioPlayer:
     )
 
 
+def test_previous_action() -> None:
+    """Кнопки ◀◀ и ▶▶: правила заданы в секундах, а не в процентах."""
+    print("\n0. Кнопки по фразам: границы в секундах")
+    # ◀◀: меньше 2 с — середина прошлой; меньше 5 с — начало текущей;
+    # иначе обычная перемотка на 5 секунд назад.
+    previous_cases = [
+        (0.0, True, ap.ACTION_PREVIOUS),
+        (1.9, True, ap.ACTION_PREVIOUS),
+        (2.0, True, ap.ACTION_RESTART),
+        (4.9, True, ap.ACTION_RESTART),
+        (5.0, True, ap.ACTION_SEEK_BACK),
+        (9.0, True, ap.ACTION_SEEK_BACK),
+        (0.5, False, ap.ACTION_RESTART),   # прошлой фразы нет
+    ]
+    for played, has_history, expected in previous_cases:
+        got = ap.previous_action(played, has_history)
+        check(got == expected,
+              f"◀◀ {played} с, история {has_history} -> {got}")
+
+    # ▶▶: до конца меньше 7 с — следующая фраза; иначе +5 секунд.
+    forward_cases = [
+        (0.0, True, ap.ACTION_NEXT),
+        (6.9, True, ap.ACTION_NEXT),
+        (7.0, True, ap.ACTION_SEEK_FORWARD),
+        (12.0, True, ap.ACTION_SEEK_FORWARD),
+        (1.0, False, ap.ACTION_SEEK_FORWARD),   # следующей ещё нет
+    ]
+    for remaining, has_next, expected in forward_cases:
+        got = ap.forward_action(remaining, has_next)
+        check(got == expected,
+              f"▶▶ осталось {remaining} с, следующая {has_next} -> {got}")
+
+    # Границы — именами, а не числами в коде.
+    check(ap.PREVIOUS_JUMP_SECONDS == 2.0,
+          f"граница «середина прошлой» — 2 с: {ap.PREVIOUS_JUMP_SECONDS}")
+    check(ap.RESTART_SECONDS == 5.0,
+          f"граница «начало текущей» — 5 с: {ap.RESTART_SECONDS}")
+    check(ap.NEXT_JUMP_SECONDS == 7.0,
+          f"граница «следующая фраза» — 7 с: {ap.NEXT_JUMP_SECONDS}")
+    check(ap.SEEK_STEP == 5.0, f"шаг перемотки — 5 с: {ap.SEEK_STEP}")
+
+
+def test_previous_returns_quant() -> None:
+    """Возврат играет середину прошлой фразы, а текущая не теряется."""
+    print("\n0б. ◀◀: середина прошлой фразы, текущая не пропадает")
+    install_stub()
+    q: queue.Queue = queue.Queue()
+    stop = threading.Event()
+    played: list[tuple[float, float]] = []   # (амплитуда, доля старта)
+    once = threading.Event()
+
+    player = make_player(q, stop)
+    original = player._play_segment
+
+    def spy(audio, stream, start_fraction=0.0):
+        played.append((round(float(np.max(audio)) * 100, 2), round(start_fraction, 2)))
+        # На втором кванте просим вернуться — как нажатие в начале фразы.
+        if len(played) == 2 and not once.is_set():
+            once.set()
+            with player._speed_lock:
+                player._previous_request = True
+        original(audio, stream, start_fraction)
+
+    player._play_segment = spy
+
+    # Фразы по 0,1 с: проиграно меньше 2 с, значит уходим к середине прошлой.
+    for level in (0.01, 0.02, 0.03):
+        q.put(np.full(4800, level, dtype=np.float32))
+    player.start()
+
+    deadline = time.monotonic() + 10
+    while len(played) < 4 and time.monotonic() < deadline:
+        time.sleep(0.05)
+    stop.set()
+    player.join(timeout=10)
+
+    check(not player.is_alive(), "плеер завершился")
+    check(len(played) >= 4, f"кванты проиграны: {played}")
+    if len(played) >= 4:
+        check(played[2][0] == played[0][0],
+              f"после возврата звучит прошлая фраза: {played}")
+        check(played[2][1] == ap.PREVIOUS_START_FRACTION,
+              f"она начинается с середины: {played}")
+        check(played[3][0] == played[1][0],
+              f"текущая фраза не потеряна: {played}")
+
+
+def test_next_jumps_forward() -> None:
+    """▶▶ при малом остатке переходит к следующей фразе, а не доигрывает."""
+    print("\n0г. ▶▶: следующая фраза, если до конца мало")
+    install_stub()
+    q: queue.Queue = queue.Queue()
+    stop = threading.Event()
+    played: list[float] = []
+    once = threading.Event()
+
+    player = make_player(q, stop)
+    original = player._play_segment
+
+    def spy(audio, stream, start_fraction=0.0):
+        played.append(round(float(np.max(audio)) * 100, 2))
+        # На первой фразе просим следующую — остаток заведомо меньше 7 с.
+        if len(played) == 1 and not once.is_set():
+            once.set()
+            with player._speed_lock:
+                player._forward_request = True
+        original(audio, stream, start_fraction)
+
+    player._play_segment = spy
+
+    for level in (0.01, 0.02):
+        q.put(np.full(4800, level, dtype=np.float32))
+    player.start()
+
+    deadline = time.monotonic() + 10
+    while len(played) < 2 and time.monotonic() < deadline:
+        time.sleep(0.05)
+    stop.set()
+    player.join(timeout=10)
+
+    check(not player.is_alive(), "плеер завершился")
+    check(played == [1.0, 2.0], f"порядок фраз: {played}")
+
+
+def test_previous_button() -> None:
+    """Обе кнопки вызывают свои обработчики, а не перемотку вслепую."""
+    print("\n0в. Кнопки ◀◀ и ▶▶ в окне плеера")
+    try:
+        import gi
+
+        gi.require_version("Gtk", "4.0")
+        from gi.repository import Gtk
+        if not Gtk.init_check():
+            raise RuntimeError("нет дисплея")
+    except Exception as exc:
+        print(f"  — пропущено: {exc}")
+        return
+
+    from silero_tts_reader.ui.playback_widget import PlaybackWidget
+
+    widget = PlaybackWidget()
+    calls = {"previous": 0, "next": 0, "rewind": 0}
+    widget.on_previous = lambda: calls.update(
+        previous=calls["previous"] + 1)
+    widget.on_next = lambda: calls.update(next=calls["next"] + 1)
+    widget.on_rewind = lambda seconds: calls.update(
+        rewind=calls["rewind"] + 1)
+
+    widget._btn_rewind.emit("clicked")
+    check(calls["previous"] == 1 and calls["rewind"] == 0,
+          f"◀◀ ушла в свой обработчик: {calls}")
+
+    widget._btn_forward.emit("clicked")
+    check(calls["next"] == 1,
+          f"▶▶ ушла в свой обработчик: {calls}")
+    check(calls["rewind"] == 0,
+          f"перемотка вслепую не вызывается: {calls}")
+
+    # Без обработчиков поведение прежнее — перемотка, а не падение.
+    widget.on_previous = None
+    widget.on_next = None
+    widget._btn_rewind.emit("clicked")
+    widget._btn_forward.emit("clicked")
+    check(calls["rewind"] == 2, f"запасной путь работает: {calls}")
+    widget.destroy()
+
+
+def test_in_quant_actions() -> None:
+    """Внутри фразы: до 5 с — с начала, после — на 5 секунд назад."""
+    print("\n0д. ◀◀ внутри фразы: начало или −5 секунд")
+    install_stub()
+    rate = 48000
+    second = 6.0                       # фраза длиной 6 с
+
+    def run(trigger_at: float) -> tuple[list[float], int]:
+        """Прогон с нажатием после trigger_at секунд звука."""
+        progress: list[float] = []
+        q: queue.Queue = queue.Queue()
+        stop = threading.Event()
+        player = make_player(q, stop, on_progress=progress.append,
+                              total_segments=1)
+
+        class Hooked:
+            # Поток-заглушка, который сам нажимает кнопку после нужного
+            # объёма записанного звука.
+            written = 0
+            fired = False
+
+            def __init__(self, **kwargs) -> None:
+                self.params = kwargs
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc) -> bool:
+                return False
+
+            def write(self, data) -> None:
+                Hooked.written += np.asarray(data).size
+                # Нажимаем ровно один раз: иначе кнопка сработает на каждой
+                # следующей записи и тест уйдёт в бесконечную перемотку.
+                if Hooked.written >= trigger_at * rate and not Hooked.fired:
+                    Hooked.fired = True
+                    with player._speed_lock:
+                        player._previous_request = True
+
+        class Device(types.ModuleType):
+            OutputStream = Hooked
+
+        ap._sounddevice = Device("sounddevice")
+
+        q.put(np.full(int(rate * second), 0.01, dtype=np.float32))
+        player.start()
+        player.join(timeout=20)
+        stop.set()
+        return progress, Hooked.written
+
+    # Нажатие на 2,5 с: меньше 5 с — фраза начинается заново (откат к нулю).
+    restart, written = run(2.5)
+    check(written >= int(rate * second) * 0.9,
+          f"фраза доиграна после отката: {written / rate:.1f} с")
+    check(any(restart[i] > restart[i + 1] for i in range(len(restart) - 1)),
+          f"прогресс откатился назад: {[round(v, 2) for v in restart[:6]]}")
+    check(min(restart) < 0.1, f"после отката прогресс мал: {round(min(restart), 2)}")
+
+    # Нажатие на 5,5 с: больше 5 с — перемотка на 5 секунд назад.
+    seek, _ = run(5.5)
+    drops = [round(seek[i + 1], 2) for i in range(len(seek) - 1)
+             if seek[i] > seek[i + 1]]
+    check(bool(drops), f"прогресс ушёл назад: {drops[:5]}")
+    if drops:
+        # 5,5 с − 5 с = 0,5 с от начала фразы.
+        check(any(v < 0.2 for v in drops),
+              f"откат на 5 секунд, а не в начало: {drops[:5]}")
+
+
 def test_single_stream() -> None:
     print("\n1. Один поток вывода на всю сессию")
     install_stub()
@@ -239,6 +475,11 @@ def main() -> int:
     test_gap_between_quanta()
     test_overall_progress()
     test_speed_control_disabled()
+    test_previous_action()
+    test_previous_returns_quant()
+    test_next_jumps_forward()
+    test_in_quant_actions()
+    test_previous_button()
     print(f"\nвсе проверки пройдены: {CHECKS}")
     return 0
 
