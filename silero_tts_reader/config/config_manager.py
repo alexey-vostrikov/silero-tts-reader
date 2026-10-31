@@ -47,6 +47,9 @@ DEFAULTS: dict[str, Any] = {
         # Ударения по словарю: off — ничего не трогать (модель ставит сама),
         # user — только правки пользователя, dict — словарь, омографы и правки.
         "stress_dict": "off",
+        # Откуда ударения: auto — ruaccent, если установлен, иначе словарь;
+        # dictionary — только встроенный словарь; ruaccent — только ruaccent.
+        "stress_source": "auto",
         # Сокращения: off — не трогать, known — расшифровки с точками и
         # известные аббревиатуры, all — плюс любое слово из заглавных по буквам.
         "abbreviations": "known",
@@ -318,6 +321,17 @@ class ConfigManager:
     def abbreviations(self, v: str) -> None:
         if v in ("off", "known", "all"):
             self.set("tts", "abbreviations", v)
+
+    @property
+    def stress_source(self) -> str:
+        """Источник ударений: auto, dictionary или ruaccent."""
+        value = self.get("tts", "stress_source", default="auto")
+        return value if value in ("auto", "dictionary", "ruaccent") else "auto"
+
+    @stress_source.setter
+    def stress_source(self, v: str) -> None:
+        if v in ("auto", "dictionary", "ruaccent"):
+            self.set("tts", "stress_source", v)
 
     @property
     def stress_file(self) -> Path:

@@ -286,6 +286,18 @@ TRANSLATIONS = {
         "The dictionary places stress without a neural network: it helps with "
         "words like «звонят» and «договор», where the model gets it wrong. "
         "Correct the built-in dictionary in stress.json inside the settings folder.",
+    "Источник ударений:": "Stress source:",
+    "ruaccent, если установлен": "ruaccent if installed",
+    "Только словарь": "Dictionary only",
+    "Только ruaccent": "ruaccent only",
+    "ruaccent размечает все слова по контексту и решает омографы "
+    "(«окна» и «окна́»), но требует отдельной установки и 160 МБ "
+    "моделей. Словарь работает всегда, однако омографы оставляет "
+    "акцентору модели.":
+        "ruaccent marks every word from context and resolves homographs "
+        "(«окна» and «окна́»), but needs a separate install and 160 MB of "
+        "models. The dictionary always works, yet leaves homographs to the "
+        "model accentor.",
     "Сокращения:": "Abbreviations:",
     "Известные и сокращения с точкой": "Known ones and dotted forms",
     "Все заглавные — по буквам": "All capitals letter by letter",
