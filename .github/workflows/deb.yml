@@ -122,6 +122,8 @@ jobs:
           python3 tests/test_accent.py
           # Выбор источника ударений: словарь, Silero Stress, ruaccent
           python3 tests/test_stress_source.py
+          # Словарь арго: формат данных, приоритет, работа без файла
+          python3 tests/test_argo.py
           # Окружение для пакетов, которых нет в apt: путь, метаданные, отказы
           python3 tests/test_extras.py
           # Сокращения: расшифровки, аббревиатуры, неоднозначные случаи
