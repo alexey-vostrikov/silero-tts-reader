@@ -393,6 +393,9 @@ class SettingsWindow(Gtk.Dialog):
         # Правки ударений сохраняются сразу, своей кнопкой, а не вместе с
         # настройками: иначе «Отмена» внизу окна отменяла бы и их.
         self.on_corrections_changed: Callable[[], None] | None = None
+        # Редактор сокращений открывается своим окном: список аббревиатур
+        # слишком длинный для строки настроек.
+        self.on_edit_abbreviations: Callable[[], None] | None = None
 
         # Свод правок: поставляемый файл и свои правки из каталога настроек.
         self._corrections = Corrections(
@@ -802,6 +805,13 @@ class SettingsWindow(Gtk.Dialog):
             ),
         )
         abbrev_row.append(self._abbrev_combo)
+
+        edit = Gtk.Button(label=_("Изменить…"))
+        edit.set_tooltip_text(_(
+            "Свой список: какие аббревиатуры читать по буквам, какие словом, "
+            "какие сокращения раскрывать"))
+        edit.connect("clicked", lambda _b: self._on_edit_abbreviations())
+        abbrev_row.append(edit)
         abbrev_row.set_tooltip_text(_(
             "«т.д.» читается как «так далее», «РФ» — как «эр эф». "
             "Режим «все заглавные» разбирает по буквам и незнакомые "
@@ -1618,6 +1628,11 @@ class SettingsWindow(Gtk.Dialog):
             self._extra_status.set_text(
                 _("не удалось: {detail}").format(detail=detail or code))
         return False   # событие одноразовое
+
+    def _on_edit_abbreviations(self) -> None:
+        """Открыть редактор сокращений, если приложение его подключило."""
+        if self.on_edit_abbreviations is not None:
+            self.on_edit_abbreviations()
 
     def _on_save(self) -> None:
         # Горячие клавиши читаем прямо из полей — в pending они попадают только при захвате

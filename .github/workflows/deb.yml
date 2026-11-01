@@ -130,6 +130,8 @@ jobs:
           python3 tests/test_extras.py
           # Сокращения: расшифровки, аббревиатуры, неоднозначные случаи
           python3 tests/test_abbrev.py
+          # Редактор сокращений: файл правок, приоритет, выключение встроенных
+          xvfb-run -a python3 tests/test_abbrev_editor.py
           # Модуль speech-dispatcher: только ru/en, перезапуск демона
           python3 tests/test_speechd_control.py
           # Диалоги: показ без run(), ссылка держится, папка как Gio.File

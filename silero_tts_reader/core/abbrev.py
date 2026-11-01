@@ -42,6 +42,20 @@ _CAPS_RE = re.compile(r"(?<![А-ЯЁA-Zа-яё])([А-ЯЁ]{2,6})(?![А-ЯЁA-Zа
 _SPACE = " "
 
 
+def spell_letters(word: str) -> str:
+    """Прочитать слово по буквам так, как его произнесёт синтез.
+
+    Общая функция для раскрытия и для редактора: пользователь должен видеть в
+    окне ровно то, что услышит, и не догадываться, как программа назовёт «щ»
+    или «й».
+    """
+    names = []
+    for letter in word:
+        name = LETTER_NAMES.get(letter.lower())
+        names.append(name if name is not None else letter)
+    return " ".join(names)
+
+
 def data_dir() -> Path:
     return Path(__file__).resolve().parent.parent / "assets" / "speech"
 
@@ -80,6 +94,12 @@ class Abbreviations:
         }
 
     def _merge(self, extra: dict) -> None:
+        """Наложить правки пользователя на встроенные данные.
+
+        ``removed`` — слова, которые пользователь выключил. Без этого списка
+        встроенную запись нельзя было бы убрать: пустая строка неотличима от
+        «нет расшифровки», а удалять данные пакета из-под пользователя нельзя.
+        """
         for key in ("expansions", "spelled"):
             values = extra.get(key) or {}
             if isinstance(values, dict):
@@ -88,6 +108,14 @@ class Abbreviations:
         words = extra.get("as_word") or []
         if isinstance(words, (list, tuple)):
             self._data["as_word"].extend(str(w) for w in words)
+        for word in extra.get("removed") or []:
+            text = str(word)
+            self._data["expansions"].pop(text, None)
+            self._data["spelled"].pop(text, None)
+            self._data["spelled"].pop(text.lower(), None)
+            self._data["as_word"] = [
+                item for item in self._data["as_word"]
+                if item.upper() != text.upper()]
 
     def _build_patterns(self) -> list[tuple[re.Pattern, str]]:
         """Шаблоны замен, от длинных к коротким.
@@ -131,10 +159,65 @@ class Abbreviations:
                 return known
             if len(token) < 2 or not self._generic:
                 return token
-            letters: list[str] = []
-            for letter in token:
-                name = LETTER_NAMES.get(letter.lower())
-                letters.append(name if name is not None else letter)
-            return _SPACE.join(letters)
+            return spell_letters(token).replace(" ", _SPACE)
 
         return _CAPS_RE.sub(replace_caps, result)
+
+
+def user_file(config_dir: Path) -> Path:
+    """Файл правок пользователя рядом с остальными настройками."""
+    return config_dir / "abbrev.json"
+
+
+def load_extra(path: Path) -> dict:
+    """Прочитать правки пользователя, отбросив некорректные записи.
+
+    Некорректная запись не должна ломать чтение книги: она пропускается,
+    остальные работают. Поэтому проверяется каждый вид отдельно.
+    """
+    empty = {"expansions": {}, "spelled": {}, "as_word": [], "removed": []}
+    if not path.is_file():
+        return empty
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return empty
+    if not isinstance(raw, dict):
+        return empty
+
+    result = {"expansions": {}, "spelled": {}, "as_word": [], "removed": []}
+    for key in ("expansions", "spelled"):
+        values = raw.get(key) or {}
+        if isinstance(values, dict):
+            result[key] = {
+                str(k).strip(): str(v).strip()
+                for k, v in values.items()
+                if str(k).strip() and str(v).strip()
+            }
+    words = raw.get("as_word") or []
+    if isinstance(words, (list, tuple)):
+        result["as_word"] = [str(w).strip() for w in words if str(w).strip()]
+    removed = raw.get("removed") or []
+    if isinstance(removed, (list, tuple)):
+        result["removed"] = [str(w).strip() for w in removed if str(w).strip()]
+    return result
+
+
+def save_extra(path: Path, data: dict) -> None:
+    """Записать правки пользователя.
+
+    Через временный файл: оборванная запись оставила бы полупустой JSON, а
+    читатель книги получил бы вместо неё молчаливое «правок нет».
+    """
+    cleaned = {
+        "expansions": {str(k): str(v) for k, v in (data.get("expansions") or {}).items()},
+        "spelled": {str(k): str(v) for k, v in (data.get("spelled") or {}).items()},
+        "as_word": [str(w) for w in (data.get("as_word") or [])],
+        "removed": [str(w) for w in (data.get("removed") or [])],
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(
+        json.dumps(cleaned, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8")
+    temporary.replace(path)

@@ -341,6 +341,11 @@ class ConfigManager:
         return self._path.with_name("stress.json")
 
     @property
+    def abbrev_file(self) -> Path:
+        """Файл правок сокращений рядом с настройками."""
+        return self._path.with_name("abbrev.json")
+
+    @property
     def speed(self) -> float:
         return float(self.get("playback", "speed", default=1.0))
 

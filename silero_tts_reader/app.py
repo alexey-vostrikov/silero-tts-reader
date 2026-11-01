@@ -34,6 +34,7 @@ from . import (  # noqa: E402
     log,
 )
 from .config.config_manager import ConfigManager  # noqa: E402
+from .core.abbrev import load_extra as load_abbrev_extra  # noqa: E402
 from .core.accent import load_overrides  # noqa: E402
 from .core.audio_player import AudioPlayer  # noqa: E402
 from .core.hotkey_listener import HotkeyListener  # noqa: E402
@@ -44,6 +45,7 @@ from .core.tts_worker import TTSWorker  # noqa: E402
 from .i18n import _  # noqa: E402
 from .run_options import RunOptions  # noqa: E402
 from .ui import window_icon  # noqa: E402
+from .ui.abbrev_window import AbbrevWindow  # noqa: E402
 from .ui.playback_widget import PlaybackWidget  # noqa: E402
 from .ui.settings_window import SettingsWindow  # noqa: E402
 from .ui.sni_tray import MenuEntry, StatusNotifierTray  # noqa: E402
@@ -90,6 +92,7 @@ class Application(Gtk.Application):
             accent_mode=self._config.stress_dict,
             accent_overrides=load_overrides(self._config.stress_file),
             abbreviations=self._config.abbreviations,
+            abbreviations_extra=load_abbrev_extra(self._config.abbrev_file),
             stress_source=self._config.stress_source,
         )
         self._hotkey_listener = HotkeyListener()
@@ -102,6 +105,9 @@ class Application(Gtk.Application):
         self._widget: PlaybackWidget | None = None
         self._tray: StatusNotifierTray | None = None
         self._settings_dialog: SettingsWindow | None = None
+        # Окно редактора сокращений: держим ссылку, иначе диалог соберётся
+        # сборщиком мусора сразу после показа.
+        self._abbrev_dialog: AbbrevWindow | None = None
         # Ссылка на открытый диалог выбора файла обязательна: без неё
         # Gtk.FileChooserNative освобождается и не показывается.
         self._file_chooser = None
@@ -217,6 +223,7 @@ class Application(Gtk.Application):
         actions = {
             "open-file": (self._open_file_dialog, ["<Control>o"]),
             "settings": (self._open_settings, ["<Control>comma"]),
+            "abbreviations": (self.open_abbreviations, []),
             "about": (self._show_about, []),
             "quit": (self._quit, ["<Control>q"]),
             "speak-clipboard": (self._on_speak_clipboard, ["<Control><Shift>c"]),
@@ -241,6 +248,7 @@ class Application(Gtk.Application):
         menu.append(_("Озвучить выделенное"), "app.speak-selection")
         menu.append(_("Остановить"), "app.stop")
         section = Gio.Menu()
+        section.append(_("Сокращения…"), "app.abbreviations")
         section.append(_("Настройки"), "app.settings")
         section.append(_("О программе"), "app.about")
         menu.append_section(None, section)
@@ -721,6 +729,7 @@ class Application(Gtk.Application):
         # Правки ударений сохраняются из вкладки сразу, мимо «Сохранить»:
         # их надо применить к живому акцентору, иначе правка не сработает.
         dialog.on_corrections_changed = self._reload_stress
+        dialog.on_edit_abbreviations = self.open_abbreviations
         self._settings_dialog = dialog
         dialog.connect("destroy", self._on_settings_closed)
         dialog.connect("close-request", self._on_settings_close_request)
@@ -746,6 +755,27 @@ class Application(Gtk.Application):
         # Значок трея мог сменить вариант цвета: переставляем без перезапуска.
         if self._widget is not None:
             self._widget.set_speed(self._config.speed)
+
+    def open_abbreviations(self) -> None:
+        """Открыть редактор сокращений и применить правки после сохранения."""
+        if self._abbrev_dialog is not None:
+            self._abbrev_dialog.present()
+            return
+
+        dialog = AbbrevWindow(
+            self._widget or None, self._config.abbrev_file)
+        self._abbrev_dialog = dialog
+        dialog.connect("response", self._on_abbrev_closed)
+        dialog.present()
+
+    def _on_abbrev_closed(self, dialog, response: int) -> None:
+        self._abbrev_dialog = None
+        if response == Gtk.ResponseType.OK:
+            # Правки прочитаны с диска, а не из окна: так работает и правка
+            # файла руками, пока окно было открыто.
+            self._engine.reload_abbreviations(
+                load_abbrev_extra(self._config.abbrev_file))
+            self._notify(_("Сокращения сохранены"))
 
     def _reload_stress(self) -> None:
         """Перечитать правки ударений в живом движке.
