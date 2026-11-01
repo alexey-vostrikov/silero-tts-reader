@@ -101,10 +101,26 @@ def _is_heading(line: str) -> bool:
     return bool(_CHAPTER_RE.match(stripped))
 
 
+@dataclass
+class Speech:
+    """Готовая фраза: звук и текст, который ушёл в синтез.
+
+    Текст едет вместе с аудио, а не отдельным сообщением: очередь расходуется
+    по одному, квант можно повторить или отложить, и сопоставлять звук с
+    текстом по номеру пришлось бы заново в каждом из этих случаев. Здесь они
+    не могут разъехаться, потому что хранятся в одном объекте.
+    """
+
+    audio: np.ndarray
+    text: str
+
+
 class TTSWorker(threading.Thread):
     """Synthesizes text segments in a background thread.
 
-    Produces numpy audio arrays into `audio_queue`.
+    Кладёт в `audio_queue` объекты ``Speech`` — звук вместе с текстом, который
+    ушёл в синтез. Текст нужен окну: по нему видно, какие сокращения и
+    ударения получила модель.
     Emits `on_error(str)` on synthesis failures.
     """
 
@@ -456,9 +472,13 @@ class TTSWorker(threading.Thread):
                     print("[TTSWorker] Остановлено", flush=True)
                     break
                 index += 1
-                audio = self._engine.synthesize(quantum.text, self._speaker)
+                # Текст заполняет сам движок: он один знает, что получилось
+                # после сокращений и ударений.
+                prepared: list[str] = []
+                audio = self._engine.synthesize(
+                    quantum.text, self._speaker, on_prepared=prepared.append)
                 audio = self._with_pause(audio, quantum)
-                if not self._put(audio):
+                if not self._put(Speech(audio, prepared[-1] if prepared else quantum.text)):
                     print("[TTSWorker] Остановлено при ожидании места в очереди", flush=True)
                     break
                 if self._on_progress:

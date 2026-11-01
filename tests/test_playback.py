@@ -22,6 +22,7 @@ import numpy as np
 
 from silero_tts_reader.core import audio_player as ap
 from silero_tts_reader.core.audio_player import AudioPlayer
+from silero_tts_reader.core.tts_worker import Speech
 
 CHECKS = 0
 
@@ -64,6 +65,16 @@ def install_stub():
     ap._sounddevice = FakeSoundDevice("sounddevice")
     FakeStream.opened = 0
     FakeStream.written = []
+
+
+def put(queue_, audio, text: str = "") -> None:
+    """Положить в очередь то, что кладёт воркер: звук вместе с текстом.
+
+    Плеер с недавних пор принимает только ``Speech``: текст едет вместе со
+    звуком, иначе при возврате к предыдущей фразе пришлось бы сопоставлять их
+    по номеру заново. Голый массив — это ошибка, а не совместимость.
+    """
+    queue_.put(Speech(audio, text))
 
 
 def make_player(queue_, stop, **kwargs) -> AudioPlayer:
@@ -145,7 +156,7 @@ def test_previous_returns_quant() -> None:
 
     # Фразы по 0,1 с: проиграно меньше 2 с, значит уходим к середине прошлой.
     for level in (0.01, 0.02, 0.03):
-        q.put(np.full(4800, level, dtype=np.float32))
+        put(q, np.full(4800, level, dtype=np.float32), f"фраза {level}")
     player.start()
 
     deadline = time.monotonic() + 10
@@ -189,7 +200,7 @@ def test_next_jumps_forward() -> None:
     player._play_segment = spy
 
     for level in (0.01, 0.02):
-        q.put(np.full(4800, level, dtype=np.float32))
+        put(q, np.full(4800, level, dtype=np.float32), f"фраза {level}")
     player.start()
 
     deadline = time.monotonic() + 10
@@ -289,7 +300,8 @@ def test_in_quant_actions() -> None:
 
         ap._sounddevice = Device("sounddevice")
 
-        q.put(np.full(int(rate * second), 0.01, dtype=np.float32))
+        put(q, np.full(int(rate * second), 0.01, dtype=np.float32),
+            "длинная фраза")
         player.start()
         player.join(timeout=20)
         stop.set()
@@ -314,6 +326,158 @@ def test_in_quant_actions() -> None:
               f"откат на 5 секунд, а не в начало: {drops[:5]}")
 
 
+def test_segment_text() -> None:
+    """Плеер сообщает текст кванта, который начал звучать."""
+    print("\n0е. Текст кванта доходит до окна")
+    install_stub()
+    q: queue.Queue = queue.Queue()
+    stop = threading.Event()
+    shown: list[str] = []
+
+    player = make_player(q, stop)
+    player._on_segment_text = shown.append
+    player.start()
+
+    for level, text in ((0.01, "Первая фраза."), (0.02, "Втор+ая фр+аза.")):
+        put(q, np.full(4800, level, dtype=np.float32), text)
+    deadline = time.monotonic() + 10
+    while len(shown) < 2 and time.monotonic() < deadline:
+        time.sleep(0.05)
+    stop.set()
+    player.join(timeout=10)
+
+    check(shown[:2] == ["Первая фраза.", "Втор+ая фр+аза."],
+          f"текст по порядку и с разметкой: {shown}")
+    # Разметка не вычищается: в окне должно быть ровно то, что получил синтез.
+    check("+" in shown[1], f"знак ударения сохранён: {shown[1]!r}")
+
+
+def test_segment_text_on_return() -> None:
+    """При возврате к предыдущей фразе показывается её текст, а не чужой."""
+    print("\n0ж. Возврат: текст совпадает со звуком")
+    install_stub()
+    q: queue.Queue = queue.Queue()
+    stop = threading.Event()
+    shown: list[str] = []
+    once = threading.Event()
+
+    player = make_player(q, stop)
+    player._on_segment_text = shown.append
+    original = player._play_segment
+
+    def spy(audio, stream, start_fraction=0.0):
+        # На второй фразе просим вернуться — как нажатие в начале.
+        if len(shown) == 2 and not once.is_set():
+            once.set()
+            with player._speed_lock:
+                player._previous_request = True
+        original(audio, stream, start_fraction)
+
+    player._play_segment = spy
+
+    for level, text in ((0.01, "Первая."), (0.02, "Вторая."), (0.03, "Третья.")):
+        put(q, np.full(4800, level, dtype=np.float32), text)
+    player.start()
+
+    deadline = time.monotonic() + 10
+    while len(shown) < 4 and time.monotonic() < deadline:
+        time.sleep(0.05)
+    stop.set()
+    player.join(timeout=10)
+
+    check(len(shown) >= 4, f"фразы показаны: {shown}")
+    if len(shown) >= 4:
+        check(shown[2] == shown[0], f"после возврата текст прошлой фразы: {shown}")
+        check(shown[3] == shown[1], f"текущая фраза показана снова: {shown}")
+
+
+def test_widget_text_room() -> None:
+    """У окна есть место под текст, и надпись принимает строку как есть."""
+    print("\n0з. Окно: место под текст синтеза")
+    try:
+        import gi
+
+        gi.require_version("Gtk", "4.0")
+        from gi.repository import Gtk
+        if not Gtk.init_check():
+            raise RuntimeError("нет дисплея")
+    except Exception as exc:
+        print(f"  — пропущено: {exc}")
+        return
+
+    from silero_tts_reader.ui import playback_widget as pw
+
+    widget = pw.PlaybackWidget()
+    widget.set_segment_text("Лет+ёха был скор+ее всег+о с бодун+а.")
+    check(widget._text_view.get_text() == "Лет+ёха был скор+ее всег+о с бодун+а.",
+          f"надпись показывает строку с разметкой: {widget._text_view.get_text()!r}")
+    check(widget._text_view.get_wrap(), "длинная фраза переносится, а не обрезается")
+    check(widget._text_view.get_lines() >= 2,
+          f"строк под текст: {widget._text_view.get_lines()}")
+
+    # Высота окна включает блок текста: иначе надпись обрезалась бы снизу.
+    width = widget._metrics["width"]
+    height = widget._metrics["height"]
+    without_text = int(width * pw.WIDGET_HEIGHT / pw.WIDGET_WIDTH)
+    check(height > without_text,
+          f"высота {height} больше прежней {without_text} на блок текста")
+
+    widget.set_segment_text("")
+    check(widget._text_view.get_text() == "", "пустой текст очищает надпись")
+    widget.destroy()
+
+
+def test_text_goes_with_audio() -> None:
+    """Воркер кладёт в очередь звук вместе с текстом, ушедшим в синтез.
+
+    Проверяется настоящий путь: движок сам сообщает подготовленную строку
+    (сокращения и ударения), воркер кладёт её рядом со звуком. Модель
+    подменена: torch и веса для этой проверки не нужны.
+    """
+    print("\n0и. Текст едет вместе со звуком")
+    from silero_tts_reader.config.config_manager import ConfigManager
+    from silero_tts_reader.core.tts_engine import TTSEngine
+    from silero_tts_reader.core.tts_worker import TTSWorker
+
+    class FakeAudio:
+        def numpy(self):
+            return np.zeros(480, dtype=np.float32)
+
+    class FakeModel:
+        seen: ClassVar[list[str]] = []
+
+        def apply_tts(self, text, speaker, sample_rate, **kwargs):
+            FakeModel.seen.append(text)
+            return FakeAudio()
+
+    engine = TTSEngine(sample_rate=48000, models={}, accent_mode="dict",
+                       abbreviations="known", stress_source="dictionary")
+    engine._models["ru"] = FakeModel()
+    engine._speakers["ru"] = ["xenia"]
+
+    q: queue.Queue = queue.Queue()
+    stop = threading.Event()
+    worker = TTSWorker(
+        engine=engine, text="Летёха был скорее всего с бодуна.",
+        speaker="xenia", config=ConfigManager(), audio_queue=q,
+        stop_event=stop,
+    )
+    worker.start()
+    deadline = time.monotonic() + 15
+    while q.empty() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    stop.set()
+    worker.join(timeout=10)
+
+    item = q.get_nowait() if not q.empty() else None
+    check(isinstance(item, Speech), f"в очереди Speech, а не голый массив: {item!r}")
+    if isinstance(item, Speech):
+        check(item.text in FakeModel.seen,
+              f"текст совпадает с тем, что получила модель: {item.text!r}")
+        check("бодун+а" in item.text,
+              f"разметка в тексте сохранилась: {item.text!r}")
+
+
 def test_single_stream() -> None:
     print("\n1. Один поток вывода на всю сессию")
     install_stub()
@@ -324,7 +488,7 @@ def test_single_stream() -> None:
 
     tone = np.zeros(4800, dtype=np.float32)   # 0,1 с
     for _ in range(4):
-        q.put(tone)
+        put(q, tone, "тон")
         time.sleep(0.05)
     # Никакого «мусорного» объекта в очередь: проверка про один поток, а не
     # про устойчивость к неожиданным значениям. Раньше сюда клали пустышку
@@ -352,11 +516,13 @@ def test_unexpected_item() -> None:
     player = make_player(q, stop, on_error=errors.append)
     player.start()
 
-    q.put(np.zeros(4800, dtype=np.float32))
+    put(q, np.zeros(4800, dtype=np.float32), "тишина")
     time.sleep(0.2)
-    q.put(object())          # не звук и не метка конца
+    # Битая единица очереди: у неё нет звука. Плеер обязан назвать причину и
+    # продолжить работу, а не упасть молча.
+    q.put(Speech(object(), "битый квант"))
     time.sleep(0.3)
-    q.put(np.zeros(4800, dtype=np.float32))   # после ошибки плеер обязан жить
+    put(q, np.zeros(4800, dtype=np.float32), "тишина")   # после ошибки плеер обязан жить
     time.sleep(0.4)
     stop.set()
     player.join(timeout=5)
@@ -376,8 +542,8 @@ def test_gap_between_quanta() -> None:
     player.start()
 
     tone = np.full(4800, 0.2, dtype=np.float32)   # 0,1 с ненулевого звука
-    q.put(tone)
-    q.put(tone)
+    put(q, tone, "тон")
+    put(q, tone, "тон")
     time.sleep(0.6)
     stop.set()
     player.join(timeout=5)
@@ -418,7 +584,7 @@ def test_overall_progress() -> None:
     player.start()
     tone = np.zeros(2400, dtype=np.float32)
     for _ in range(4):
-        q.put(tone)
+        put(q, tone, "тон")
         time.sleep(0.05)
     time.sleep(0.5)
     stop.set()
@@ -480,6 +646,10 @@ def main() -> int:
     test_next_jumps_forward()
     test_in_quant_actions()
     test_previous_button()
+    test_segment_text()
+    test_segment_text_on_return()
+    test_widget_text_room()
+    test_text_goes_with_audio()
     print(f"\nвсе проверки пройдены: {CHECKS}")
     return 0
 

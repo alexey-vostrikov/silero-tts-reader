@@ -45,10 +45,15 @@ class FakeEngine:
         self._delay = delay
         self._length = int(length)
 
-    def synthesize(self, text: str, speaker=None):
+    def synthesize(self, text: str, speaker=None, language=None,
+                   on_prepared=None):
+        # Тот же контракт, что у настоящего движка: он сообщает строку,
+        # которая уходит в модель, — воркер кладёт её рядом со звуком.
         if self._delay:
             time.sleep(self._delay)
         self.synthesized.append(text)
+        if on_prepared is not None:
+            on_prepared(text)
         if self._length:
             return np.zeros(self._length, dtype=np.float32)
         return [0.0]
@@ -248,6 +253,7 @@ def test_pauses() -> None:
     worker.start()
 
     sizes = []
+    texts = []
     deadline = time.time() + 10
     while time.time() < deadline:
         try:
@@ -256,10 +262,12 @@ def test_pauses() -> None:
             break
         if TTSWorker.is_done_sentinel(item):
             break
-        sizes.append(len(item))
+        sizes.append(len(item.audio))
+        texts.append(item.text)
     worker.join(timeout=5)
 
     check(len(sizes) == 3, f"три сегмента: {sizes}")
+    check(all(texts), f"у каждого сегмента есть текст для окна: {texts}")
     check(sizes[0] == 4800 + 19200, f"перед заголовком 400 мс тишины: {sizes[0]}")
     # Реплика идёт сразу после заголовка, поэтому подходит под две паузы, и
     # по правилу «самая длинная» берётся пауза заголовка (800), а не диалога (700).
@@ -284,7 +292,7 @@ def test_pauses() -> None:
             break
         if TTSWorker.is_done_sentinel(item):
             break
-        plain.append(len(item))
+        plain.append(len(item.audio))
     worker2.join(timeout=5)
     check(all(size == 4800 for size in plain), f"паузы выключены — голые сегменты: {plain}")
 

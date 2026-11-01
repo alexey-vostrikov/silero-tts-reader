@@ -12,6 +12,7 @@ import contextlib
 import re
 import threading
 import warnings
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -109,11 +110,17 @@ class TTSEngine:
         text: str,
         speaker: str | dict[str, str] | None = None,
         language: str | None = None,
+        on_prepared: Callable[[str], None] | None = None,
     ) -> np.ndarray:
         """Synthesize text → float32 numpy array at self._sample_rate Hz.
 
         ``speaker`` может быть именем голоса или словарём «язык → голос»:
         второй вариант нужен приложению, где голос выбран для каждого языка.
+
+        ``on_prepared`` получает ровно ту строку, которая уйдёт в модель, — с
+        расшифрованными сокращениями и расставленными ударениями. Приложению
+        это нужно, чтобы показать, что именно произносится: без такой строки
+        неверное ударение выглядит ошибкой словаря, хотя словарь его поставил.
         """
         # self.resolve_language, а не модульная функция: у движка свои пути
         # к моделям, и доступность языка считается по ним.
@@ -144,6 +151,9 @@ class TTSEngine:
                 kwargs["put_accent"] = True
             if profile is not None and profile.put_yo:
                 kwargs["put_yo"] = True
+
+            if on_prepared is not None:
+                on_prepared(prepared)
 
             with _no_grad():
                 audio = model.apply_tts(**kwargs)
