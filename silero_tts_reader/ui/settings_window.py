@@ -410,8 +410,12 @@ class SettingsWindow(Gtk.Dialog):
         apply_icon(self, _("Настройки — Silero TTS Reader"))
 
         self.set_default_size(round(640 * self._ui_scale),
-                              round(560 * self._ui_scale))
-        self.set_resizable(False)
+                              self._fitted_height(round(560 * self._ui_scale)))
+        # Окно обязано помещаться в экран и не обязано быть неизменяемым:
+        # содержимое вкладок выше окна, и при запрете изменения размера GTK
+        # растягивает диалог до натуральной высоты, уводя кнопки за нижний
+        # край экрана (проверено: 940 px при экране 768).
+        self.set_resizable(True)
         self._content_margin = round(16 * self._ui_scale)
 
         if self._theme_manager:
@@ -438,7 +442,13 @@ class SettingsWindow(Gtk.Dialog):
                 getattr(self, widget).set_accent(accent)
 
         if is_dark:
-            bg, fg, muted, pane = "#18181b", "#f4f4f5", "#a1a1aa", "#27272a"
+            _bg, fg, muted, pane = "#18181b", "#f4f4f5", "#a1a1aa", "#27272a"
+            # Пояснения: #b4b4b9 на панели даёт 7.21:1, тогда как 55 % белого
+            # (dim-label) — только 5.17:1, а в светлой теме и вовсе ниже порога.
+            hint_fg = "#b4b4b9"
+            # Текст активной вкладки: сам акцент #6366f1 на фоне диалога даёт
+            # 3.97:1 — ниже порога для 14 px. Подчёркивание остаётся акцентом.
+            tab_fg = "#a5b4fc"
             entry_bg, border, reset_bg, reset_fg = (
                 rgba("#ffffff", 0.06),
                 rgba("#ffffff", 0.12),
@@ -448,29 +458,43 @@ class SettingsWindow(Gtk.Dialog):
             reset_border = rgba("#ef4444", 0.4)
             error_fg = "#f87171"
         else:
-            bg, fg, muted, pane = "#f8fafc", "#0f172a", "#64748b", "#ffffff"
+            _bg, fg, muted, pane = "#f8fafc", "#0f172a", "#64748b", "#ffffff"
+            # #475569 на белом — 7.58:1; #64748b давал 4.76:1, то есть в обрез,
+            # а на панели #f8fafc и вовсе 4.55:1.
+            hint_fg = "#475569"
+            # Текст активной вкладки на светлом фоне: #6366f1 давал 4.27:1,
+            # #4f46e5 — 6.01:1. Подчёркивание остаётся акцентом.
+            tab_fg = "#4f46e5"
             entry_bg, border, reset_bg, reset_fg = "#f1f5f9", "#cbd5e1", "#fee2e2", "#dc2626"
             reset_border = "#fca5a5"
             error_fg = "#dc2626"
 
+        # В GTK4 нет узла dialog: окно диалога — это window с классом .dialog.
+        # Правило dialog не совпадает ни с чем и молча не действует, поэтому
+        # фон и цвет текста окна берутся из системной темы; ниже заданы только
+        # элементы, чьи селекторы совпадают.
         provider = Gtk.CssProvider()
+        # Заголовок рамки — обычным регистром и цветом текста: капс на 11 px в
+        # акцентном цвете давал 3.33:1 в тёмной теме и 4.47:1 в светлой, ниже
+        # порога для мелкого текста. Пояснения получили свой класс hint: у
+        # dim-label в светлой теме было 4.0:1.
         provider.load_from_data(
             scope_css(
                 f"""
-            dialog {{ background-color: {bg}; }}
-            dialog label {{ color: {fg}; font-size: 13px; }}
             notebook > header {{ background-color: transparent; border: none; }}
             notebook > header tab {{
                 background-color: transparent;
                 color: {muted};
-                padding: 8px 22px;
+                padding: 7px 14px;
                 border-bottom: 2px solid transparent;
-                font-size: 16px;
+                font-size: 14px;
             }}
-            notebook > header tab:checked {{ color: {accent}; border-bottom: 2px solid {accent}; }}
+            notebook > header tab:checked {{ color: {tab_fg}; border-bottom: 2px solid {accent}; }}
             notebook stack {{ background-color: {pane}; border: 1px solid {border}; border-radius: 8px; }}
-            frame > label {{ color: {accent}; font-size: 11px; font-weight: 600; }}
+            frame > label {{ color: {fg}; font-size: 12px; font-weight: 600; }}
             frame {{ border: 1px solid {border}; border-radius: 8px; }}
+            label.hint {{ color: {hint_fg}; font-size: 12px; }}
+            scrolledwindow.settings-scroll {{ background-color: transparent; }}
             entry, spinbutton {{
                 background-image: none;
                 background-color: {entry_bg};
@@ -527,28 +551,62 @@ class SettingsWindow(Gtk.Dialog):
 
     # ── Сборка интерфейса ────────────────────────────────────────────────────
 
+    def _fitted_height(self, wanted: int) -> int:
+        """Высота окна, помещающаяся в экран.
+
+        Диалог модальный и должен быть целиком виден: если он выше рабочей
+        области, кнопки «Сохранить» и «Отмена» уходят за край, и настройки
+        нельзя ни применить, ни закрыть.
+        """
+        display = self.get_display()
+        monitors = display.get_monitors() if display is not None else None
+        if not monitors or monitors.get_n_items() == 0:
+            return wanted
+        geometry = monitors.get_item(0).get_geometry()
+        # Оставляем место панели и запас, чтобы окно не липло к краям.
+        limit = int(geometry.height * 0.9)
+        return max(360, min(wanted, limit))
+
     def _build_ui(self) -> None:
         content = self.get_content_area()
         content.set_spacing(12)
 
         self._notebook = Gtk.Notebook()
-        self._notebook.append_page(self._build_hotkeys_tab(), Gtk.Label(label="⌨️"))
-        self._notebook.append_page(self._build_voice_tab(), Gtk.Label(label="🎭"))
-        self._notebook.append_page(self._build_corrections_tab(), Gtk.Label(label="🔤"))
-        self._notebook.append_page(self._build_appearance_tab(), Gtk.Label(label="🎨"))
-        self._notebook.append_page(self._build_positioning_tab(), Gtk.Label(label="🪟"))
-        self._notebook.append_page(self._build_ai_tab(), Gtk.Label(label="🤖"))
+        self._notebook.append_page(self._build_hotkeys_tab(), Gtk.Label(label=_("Клавиши")))
+        self._notebook.append_page(self._build_voice_tab(), Gtk.Label(label=_("Голос")))
+        self._notebook.append_page(self._build_corrections_tab(), Gtk.Label(label=_("Правки")))
+        self._notebook.append_page(self._build_appearance_tab(), Gtk.Label(label=_("Оформление")))
+        self._notebook.append_page(self._build_positioning_tab(), Gtk.Label(label=_("Окно")))
+        self._notebook.append_page(self._build_diagnostics_tab(), Gtk.Label(label=_("Журнал")))
+        self._notebook.append_page(self._build_ai_tab(), Gtk.Label(label=_("ИИ")))
         self._notebook.set_tab_pos(Gtk.PositionType.TOP)
         for index, tip in enumerate(
             ("Горячие клавиши", "Голос и аудио", "Правки ударений", "Внешний вид",
-             "Позиционирование окна", "ИИ & Транслитерация")
+             "Позиционирование окна", "Журнал диагностики", "ИИ и транслитерация")
         ):
-            self._notebook.get_nth_page(index).set_tooltip_text(_(tip))
-        content.append(self._notebook)
+            page = self._notebook.get_nth_page(index)
+            page.set_tooltip_text(_(tip))
+            # Подпись вкладки — текст, а не только значок: назначение раздела
+            # должно читаться и без наведения, и скринридером.
+            tab = self._notebook.get_tab_label(page)
+            if tab is not None:
+                tab.set_tooltip_text(_(tip))
+                tab.update_property([Gtk.AccessibleProperty.LABEL], [_(tip)])
+
+        # Страницы выше окна: без прокрутки нижние строки недоступны, а окно
+        # растягивалось бы за пределы экрана.
+        self._scroller = Gtk.ScrolledWindow()
+        self._scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self._scroller.set_child(self._notebook)
+        self._scroller.set_has_frame(False)
+        self._scroller.add_css_class("settings-scroll")
+        content.append(self._scroller)
         self._notebook.set_hexpand(True)
 
         button_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         content.append(button_row)
+        # Кнопки не уезжают: они вне прокручиваемой области и всегда на месте.
+        button_row.set_valign(Gtk.Align.END)
 
         self._btn_reset = Gtk.Button(label=_("Сброс к умолчаниям"))
         self._btn_reset.add_css_class("reset")
@@ -578,7 +636,7 @@ class SettingsWindow(Gtk.Dialog):
         page.set_margin_start(12)
         page.set_margin_end(12)
 
-        group = Gtk.Frame(label=_("ГЛОБАЛЬНЫЕ ГОРЯЧИЕ КЛАВИШИ"))
+        group = Gtk.Frame(label=_("Глобальные горячие клавиши"))
         grid = Gtk.Grid(row_spacing=10, column_spacing=12)
         grid.set_margin_top(10)
         grid.set_margin_bottom(10)
@@ -595,7 +653,7 @@ class SettingsWindow(Gtk.Dialog):
         self._hk_selection.on_captured = lambda v: self._pending.update(
             {"hotkey_speak_selection": v}
         )
-        grid.attach(self._label(_("Озвучить выделенное:")), 0, 0, 1, 1)
+        grid.attach(self._field_label(_("Озвучить выделенное:"), self._hk_selection), 0, 0, 1, 1)
         grid.attach(self._hk_selection, 1, 0, 1, 1)
 
         self._hk_clipboard = HotkeyCapture()
@@ -604,14 +662,14 @@ class SettingsWindow(Gtk.Dialog):
         self._hk_clipboard.on_captured = lambda v: self._pending.update(
             {"hotkey_speak_clipboard": v}
         )
-        grid.attach(self._label(_("Озвучить буфер обмена:")), 0, 1, 1, 1)
+        grid.attach(self._field_label(_("Озвучить буфер обмена:"), self._hk_clipboard), 0, 1, 1, 1)
         grid.attach(self._hk_clipboard, 1, 1, 1, 1)
 
         self._hk_stop = HotkeyCapture()
         self._hk_stop.set_accent(accent)
         self._hk_stop.set_hotkey(self._config.hotkey_stop)
         self._hk_stop.on_captured = lambda v: self._pending.update({"hotkey_stop": v})
-        grid.attach(self._label(_("Остановить:")), 0, 2, 1, 1)
+        grid.attach(self._field_label(_("Остановить:"), self._hk_stop), 0, 2, 1, 1)
         grid.attach(self._hk_stop, 1, 2, 1, 1)
 
         hint = Gtk.Label(
@@ -620,7 +678,7 @@ class SettingsWindow(Gtk.Dialog):
         )
         hint.set_xalign(0.0)
         hint.set_wrap(True)
-        hint.set_name("hint")
+        hint.add_css_class("hint")
         page.append(hint)
 
         _spacer = Gtk.Box()
@@ -639,7 +697,7 @@ class SettingsWindow(Gtk.Dialog):
         page.set_margin_start(12)
         page.set_margin_end(12)
 
-        voice_group = Gtk.Frame(label=_("ГОЛОС"))
+        voice_group = Gtk.Frame(label=_("Голос"))
         voice_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         voice_box.set_margin_top(10)
         voice_box.set_margin_bottom(10)
@@ -650,12 +708,12 @@ class SettingsWindow(Gtk.Dialog):
 
         # Язык модели: голоса у языков разные, выбирать их вперемешку нельзя
         lang_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        lang_row.append(self._label(_("Язык:")))
         self._voice_lang_combo = Gtk.ComboBoxText()
         for lang in self._voices_by_lang:
             self._voice_lang_combo.append_text(lang)
         self._voice_lang_combo.set_active(0)
         self._voice_lang_combo.connect("changed", lambda _c: self._reload_voices())
+        lang_row.append(self._field_label(_("Язык:"), self._voice_lang_combo))
         lang_row.append(self._voice_lang_combo)
         voice_box.append(lang_row)
 
@@ -690,7 +748,7 @@ class SettingsWindow(Gtk.Dialog):
 
         self._reload_voices()
 
-        speed_group = Gtk.Frame(label=_("СКОРОСТЬ ВОСПРОИЗВЕДЕНИЯ ПО УМОЛЧАНИЮ"))
+        speed_group = Gtk.Frame(label=_("Скорость воспроизведения по умолчанию"))
         speed_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         speed_row.set_margin_top(10)
         speed_row.set_margin_bottom(10)
@@ -713,11 +771,11 @@ class SettingsWindow(Gtk.Dialog):
 
         if not SPEED_AVAILABLE:
             no_rb = Gtk.Label(label=_("(требуется rubberband-cli)"))
-            no_rb.set_name("hint")
+            no_rb.add_css_class("hint")
             speed_row.append(no_rb)
 
         # ── Чтение текста ────────────────────────────────────────────────────
-        speech_group = Gtk.Frame(label=_("ЧТЕНИЕ ТЕКСТА"))
+        speech_group = Gtk.Frame(label=_("Чтение текста"))
         speech_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         speech_box.set_margin_top(10)
         speech_box.set_margin_bottom(10)
@@ -727,7 +785,6 @@ class SettingsWindow(Gtk.Dialog):
         page.append(speech_group)
 
         stress_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        stress_row.append(self._label(_("Ударения:")))
         self._stress_combo = Gtk.ComboBoxText()
         for value, title in (
             ("off", _("Как решит модель")),
@@ -742,6 +799,7 @@ class SettingsWindow(Gtk.Dialog):
                 {"stress_dict": combo.get_active_id() or "off"}
             ),
         )
+        stress_row.append(self._field_label(_("Ударения:"), self._stress_combo))
         stress_row.append(self._stress_combo)
         stress_row.set_tooltip_text(_(
             "Словарь расставляет ударения без нейросети: он выручает на словах "
@@ -751,7 +809,6 @@ class SettingsWindow(Gtk.Dialog):
         speech_box.append(stress_row)
 
         source_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        source_row.append(self._label(_("Источник ударений:")))
         self._stress_source_combo = Gtk.ComboBoxText()
         for value, title in (
             ("auto", _("Silero Stress, затем ruaccent")),
@@ -765,6 +822,7 @@ class SettingsWindow(Gtk.Dialog):
             "changed",
             lambda combo: self._on_source_changed(combo),
         )
+        source_row.append(self._field_label(_("Источник ударений:"), self._stress_source_combo))
         source_row.append(self._stress_source_combo)
 
         # Кнопка нужна потому, что пакета в apt нет: пользователь выбирает
@@ -789,7 +847,6 @@ class SettingsWindow(Gtk.Dialog):
         self._refresh_extra_state()
 
         abbrev_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        abbrev_row.append(self._label(_("Сокращения:")))
         self._abbrev_combo = Gtk.ComboBoxText()
         for value, title in (
             ("known", _("Известные и сокращения с точкой")),
@@ -804,6 +861,7 @@ class SettingsWindow(Gtk.Dialog):
                 {"abbreviations": combo.get_active_id() or "known"}
             ),
         )
+        abbrev_row.append(self._field_label(_("Сокращения:"), self._abbrev_combo))
         abbrev_row.append(self._abbrev_combo)
 
         edit = Gtk.Button(label=_("Изменить…"))
@@ -825,11 +883,11 @@ class SettingsWindow(Gtk.Dialog):
         )
         speech_hint.set_xalign(0.0)
         speech_hint.set_wrap(True)
-        speech_hint.set_name("hint")
+        speech_hint.add_css_class("hint")
         speech_box.append(speech_hint)
 
         # ── Паузы ────────────────────────────────────────────────────────────
-        pause_group = Gtk.Frame(label=_("ПАУЗЫ"))
+        pause_group = Gtk.Frame(label=_("Паузы"))
         pause_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         pause_box.set_margin_top(10)
         pause_box.set_margin_bottom(10)
@@ -891,7 +949,7 @@ class SettingsWindow(Gtk.Dialog):
         page.set_margin_start(12)
         page.set_margin_end(12)
 
-        group = Gtk.Frame(label=_("ОФОРМЛЕНИЕ И ТЕМА ИНТЕРФЕЙСА"))
+        group = Gtk.Frame(label=_("Оформление и тема интерфейса"))
         grid = Gtk.Grid(row_spacing=10, column_spacing=12)
         grid.set_margin_top(10)
         grid.set_margin_bottom(10)
@@ -917,7 +975,7 @@ class SettingsWindow(Gtk.Dialog):
         if self._theme_combo.get_active() < 0:
             self._theme_combo.set_active(0)
         self._theme_combo.connect("changed", self._on_theme_changed)
-        grid.attach(self._label(_("Тема приложения:")), 0, 0, 1, 1)
+        grid.attach(self._field_label(_("Тема приложения:"), self._theme_combo), 0, 0, 1, 1)
         grid.attach(self._theme_combo, 1, 0, 1, 1)
 
         self._language_combo = Gtk.ComboBoxText()
@@ -930,7 +988,7 @@ class SettingsWindow(Gtk.Dialog):
         self._language_combo.connect(
             "changed", lambda w: self._pending.update({"ui_language": w.get_active_id()})
         )
-        grid.attach(self._label(_("Язык интерфейса:")), 0, 1, 1, 1)
+        grid.attach(self._field_label(_("Язык интерфейса:"), self._language_combo), 0, 1, 1, 1)
         grid.attach(self._language_combo, 1, 1, 1, 1)
 
         # Значок трея: цвет штриха не выводится из темы приложения — панель
@@ -950,7 +1008,7 @@ class SettingsWindow(Gtk.Dialog):
             "changed", lambda w: self._pending.update({"tray_icon": w.get_active_id()})
             if w.get_active_id() else None
         )
-        grid.attach(self._label(_("Значок в трее:")), 0, 3, 1, 1)
+        grid.attach(self._field_label(_("Значок в трее:"), self._tray_icon_combo), 0, 3, 1, 1)
         grid.attach(self._tray_icon_combo, 1, 3, 1, 1)
 
         self._accent_chk = Gtk.CheckButton(label=_("Использовать системный акцентный цвет"))
@@ -982,12 +1040,8 @@ class SettingsWindow(Gtk.Dialog):
         page.set_margin_start(12)
         page.set_margin_end(12)
 
-        group = Gtk.Frame(label=_("ПОЛОЖЕНИЕ ОКНА ПЛЕЕРА"))
-        grid = Gtk.Grid(row_spacing=10, column_spacing=12)
-        grid.set_margin_top(10)
-        grid.set_margin_bottom(10)
-        grid.set_margin_start(10)
-        grid.set_margin_end(10)
+        group = Gtk.Frame(label=_("Положение окна плеера"))
+        grid = self._form_grid()
         group.set_child(grid)
         page.append(group)
 
@@ -998,7 +1052,14 @@ class SettingsWindow(Gtk.Dialog):
         # У Gtk.Switch нет сигнала toggled: состояние приходит через свойство.
         self._positioning_switch.connect("notify::active",
                                          self._on_positioning_toggled)
-        grid.attach(self._label(_("Ставить окно в угол экрана:")), 0, 0, 1, 1)
+        # Натуральная ширина: растянутый на всю колонку переключатель читается
+        # как ползунок, а не как «да/нет».
+        self._positioning_switch.set_halign(Gtk.Align.START)
+        self._positioning_switch.set_hexpand(False)
+        self._positioning_switch.set_valign(Gtk.Align.CENTER)
+        switch_label = self._field_label(_("Ставить окно в угол экрана:"),
+                                         self._positioning_switch)
+        grid.attach(switch_label, 0, 0, 1, 1)
         grid.attach(self._positioning_switch, 1, 0, 1, 1)
 
         self._positioning_combo = Gtk.ComboBoxText()
@@ -1014,28 +1075,39 @@ class SettingsWindow(Gtk.Dialog):
             self._positioning_combo.set_active_id("auto")
         self._positioning_combo.connect("changed", self._on_positioning_method_changed)
         self._positioning_combo.set_sensitive(bool(enabled))
-        grid.attach(self._label(_("Способ:")), 0, 1, 1, 1)
+        self._positioning_combo.set_hexpand(False)
+        self._positioning_combo.set_halign(Gtk.Align.FILL)
+        grid.attach(self._field_label(_("Способ:"), self._positioning_combo), 0, 1, 1, 1)
         grid.attach(self._positioning_combo, 1, 1, 1, 1)
 
-        hint = Gtk.Label()
-        hint.set_wrap(True)
-        hint.set_xalign(0.0)
-        hint.add_css_class("dim-label")
-        hint.set_text(_(
+        page.append(self._hint(_(
             "Выключено по умолчанию: место окна выбирает оконный менеджер.\n"
             "Включение требует либо протокола layer-shell (в обычном GNOME его нет), "
             "либо расширения оболочки Window Calls. Слой layer-shell перекрывает "
             "панели и всплывающие меню, поэтому при проблемах со нажатиями "
             "оставьте этот режим выключенным."
-        ))
-        page.append(hint)
+        )))
 
-        log_group = Gtk.Frame(label=_("ЖУРНАЛ ДИАГНОСТИКИ"))
-        log_grid = Gtk.Grid(row_spacing=10, column_spacing=12)
-        log_grid.set_margin_top(10)
-        log_grid.set_margin_bottom(10)
-        log_grid.set_margin_start(10)
-        log_grid.set_margin_end(10)
+        _spacer = Gtk.Box()
+        _spacer.set_hexpand(True)
+        _spacer.set_vexpand(True)
+        page.append(_spacer)
+        return page
+
+    def _build_diagnostics_tab(self) -> Gtk.Widget:
+        """Вкладка «Журнал диагностики».
+
+        Отдельно от настроек окна: подробность журнала — про отладку, а не про
+        место окна, и в одной вкладке они заставляли искать нужное среди чужого.
+        """
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        page.set_margin_top(12)
+        page.set_margin_bottom(12)
+        page.set_margin_start(12)
+        page.set_margin_end(12)
+
+        log_group = Gtk.Frame(label=_("Журнал диагностики"))
+        log_grid = self._form_grid()
         log_group.set_child(log_grid)
         page.append(log_group)
 
@@ -1055,19 +1127,16 @@ class SettingsWindow(Gtk.Dialog):
             lambda w: self._pending.update({"log_level": w.get_active_id()})
             if w.get_active_id() else None,
         )
-        log_grid.attach(self._label(_("Подробность журнала:")), 0, 0, 1, 1)
+        self._log_level_combo.set_hexpand(False)
+        log_grid.attach(self._field_label(_("Подробность журнала:"),
+                                          self._log_level_combo), 0, 0, 1, 1)
         log_grid.attach(self._log_level_combo, 1, 0, 1, 1)
 
-        log_hint = Gtk.Label()
-        log_hint.set_wrap(True)
-        log_hint.set_xalign(0.0)
-        log_hint.add_css_class("dim-label")
-        log_hint.set_text(_(
+        page.append(self._hint(_(
             "Уровень действует на следующий запуск: журнал печатается в консоль, "
             "из которой запущено приложение. Ключ --log-level перекрывает эту "
             "настройку только на время запуска и её не меняет."
-        ))
-        page.append(log_hint)
+        )))
 
         _spacer = Gtk.Box()
         _spacer.set_hexpand(True)
@@ -1096,7 +1165,7 @@ class SettingsWindow(Gtk.Dialog):
         page.set_margin_start(12)
         page.set_margin_end(12)
 
-        trans_group = Gtk.Frame(label=_("ТРАНСЛИТЕРАЦИЯ"))
+        trans_group = Gtk.Frame(label=_("Транслитерация"))
         trans_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         trans_box.set_margin_top(10)
         trans_box.set_margin_bottom(10)
@@ -1124,7 +1193,7 @@ class SettingsWindow(Gtk.Dialog):
         )
         trans_box.append(self._chk_use_llm)
 
-        llm_group = Gtk.Frame(label=_("НАСТРОЙКИ ИИ-МОДЕЛИ (API)"))
+        llm_group = Gtk.Frame(label=_("Настройки ИИ-модели (API)"))
         grid = Gtk.Grid(row_spacing=8, column_spacing=12)
         grid.set_margin_top(10)
         grid.set_margin_bottom(10)
@@ -1149,24 +1218,24 @@ class SettingsWindow(Gtk.Dialog):
         if self._llm_provider_combo.get_active() < 0:
             self._llm_provider_combo.set_active(0)
         self._llm_provider_combo.connect("changed", self._on_llm_provider_changed)
-        grid.attach(self._label(_("Провайдер:")), 0, 0, 1, 1)
+        grid.attach(self._field_label(_("Провайдер:"), self._llm_provider_combo), 0, 0, 1, 1)
         grid.attach(self._llm_provider_combo, 1, 0, 1, 1)
 
         self._txt_base_url = Gtk.Entry(text=self._config.transliteration_base_url)
         self._txt_base_url.set_placeholder_text("http://localhost:11434/v1")
-        grid.attach(self._label("API Base URL:"), 0, 1, 1, 1)
+        grid.attach(self._field_label("API Base URL:", self._txt_base_url), 0, 1, 1, 1)
         grid.attach(self._txt_base_url, 1, 1, 1, 1)
 
         self._txt_api_key = Gtk.Entry(text=self._config.transliteration_api_key)
         self._txt_api_key.set_visibility(False)
         self._txt_api_key.set_input_purpose(Gtk.InputPurpose.PASSWORD)
         self._txt_api_key.set_placeholder_text("ollama / sk-…")
-        grid.attach(self._label("API Key:"), 0, 2, 1, 1)
+        grid.attach(self._field_label("API Key:", self._txt_api_key), 0, 2, 1, 1)
         grid.attach(self._txt_api_key, 1, 2, 1, 1)
 
         self._txt_model = Gtk.Entry(text=self._config.transliteration_model)
         self._txt_model.set_placeholder_text("qwen2.5 / llama3 / gpt-4o-mini")
-        grid.attach(self._label(_("Название модели:")), 0, 3, 1, 1)
+        grid.attach(self._field_label(_("Название модели:"), self._txt_model), 0, 3, 1, 1)
         grid.attach(self._txt_model, 1, 3, 1, 1)
 
         self._txt_system_prompt = Gtk.TextView()
@@ -1177,7 +1246,7 @@ class SettingsWindow(Gtk.Dialog):
         prompt_scroll = Gtk.ScrolledWindow()
         prompt_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         prompt_scroll.set_child(self._txt_system_prompt)
-        grid.attach(self._label(_("Системный промпт ИИ:")), 0, 4, 1, 1)
+        grid.attach(self._field_label(_("Системный промпт ИИ:"), self._txt_system_prompt), 0, 4, 1, 1)
         grid.attach(prompt_scroll, 1, 4, 1, 1)
 
         self._btn_test_llm = Gtk.Button(label=_("🧪 Проверить подключение ИИ"))
@@ -1190,7 +1259,7 @@ class SettingsWindow(Gtk.Dialog):
         )
         hint.set_xalign(0.0)
         hint.set_wrap(True)
-        hint.set_name("hint")
+        hint.add_css_class("hint")
         page.append(hint)
 
         _spacer = Gtk.Box()
@@ -1215,7 +1284,7 @@ class SettingsWindow(Gtk.Dialog):
         page.set_margin_start(12)
         page.set_margin_end(12)
 
-        group = Gtk.Frame(label=_("ПРАВКИ К СЛОВАРЮ УДАРЕНИЙ"))
+        group = Gtk.Frame(label=_("Правки к словарю ударений"))
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         box.set_margin_top(10)
         box.set_margin_bottom(10)
@@ -1227,7 +1296,7 @@ class SettingsWindow(Gtk.Dialog):
         self._corrections_path = Gtk.Label(label="")
         self._corrections_path.set_xalign(0.0)
         self._corrections_path.set_wrap(True)
-        self._corrections_path.set_name("hint")
+        self._corrections_path.add_css_class("hint")
         box.append(self._corrections_path)
 
         # Таблица ниже формы: строк десятки, и работать с ними удобнее, когда
@@ -1294,7 +1363,7 @@ class SettingsWindow(Gtk.Dialog):
         hint.set_use_markup(True)
         hint.set_xalign(0.0)
         hint.set_wrap(True)
-        hint.set_name("hint")
+        hint.add_css_class("hint")
         box.append(hint)
 
         self._refresh_corrections()
@@ -1421,6 +1490,62 @@ class SettingsWindow(Gtk.Dialog):
     def _label(text: str) -> Gtk.Label:
         label = Gtk.Label(label=text)
         label.set_xalign(0.0)
+        return label
+
+    def _form_grid(self) -> Gtk.Grid:
+        """Сетка формы «подпись — элемент управления».
+
+        Одна ширина колонки подписей на все рамки страницы: иначе у каждой
+        рамки своя сетка, элементы управления встают по разным вертикалям и
+        страница выглядит собранной из разных форм.
+        """
+        grid = Gtk.Grid(row_spacing=10, column_spacing=12)
+        grid.set_margin_top(10)
+        grid.set_margin_bottom(10)
+        grid.set_margin_start(10)
+        grid.set_margin_end(10)
+        grid.set_column_homogeneous(False)
+        return grid
+
+    def _field_label(self, text: str, control: Gtk.Widget | None = None) -> Gtk.Label:
+        """Подпись поля: одна ширина, выравнивание по левому краю, связь с полем.
+
+        Связь нужна не для вида: без неё скринридер объявляет элемент
+        управления без имени, а щелчок по подписи не переводит фокус в поле.
+        """
+        label = Gtk.Label(label=text)
+        label.set_xalign(0.0)
+        label.set_halign(Gtk.Align.START)
+        label.set_valign(Gtk.Align.CENTER)
+        label.set_size_request(self._label_width(), -1)
+        label.set_wrap(True)
+        if control is not None:
+            label.set_mnemonic_widget(control)
+            if isinstance(control, (Gtk.ComboBoxText, Gtk.Switch)):
+                # У составных элементов нет мнемоники — связь задаётся именем
+                # в дереве доступности.
+                control.update_property([Gtk.AccessibleProperty.LABEL], [text])
+        return label
+
+    def _label_width(self) -> int:
+        """Ширина колонки подписей, достаточная для самой длинной.
+
+        Считается от масштаба интерфейса, а не от конкретной строки: подписи
+        в разных рамках должны начинать элементы управления на одной вертикали.
+        """
+        return round(190 * getattr(self, "_ui_scale", 1.0))
+
+    def _hint(self, text: str) -> Gtk.Label:
+        """Пояснение под рамкой: читаемый цвет, а не «еле видный».
+
+        Собственный класс, а не тема-зависимый ``dim-label``: у него в светлой
+        теме контраст 4.0:1 — ниже порога 4.5:1 для текста такого размера.
+        """
+        label = Gtk.Label()
+        label.set_wrap(True)
+        label.set_xalign(0.0)
+        label.add_css_class("hint")
+        label.set_text(text)
         return label
 
     # ── Обработчики ──────────────────────────────────────────────────────────
