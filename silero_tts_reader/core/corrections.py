@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -193,9 +194,21 @@ class Corrections:
 
     @property
     def writable(self) -> bool:
-        """Можно ли править поставляемый файл: в пакете он принадлежит root."""
-        return (self.builtin_path.is_file() and os.access(self.builtin_path, os.W_OK)
-                and self.builtin_path != self._broken)
+        """Можно ли править поставляемый файл: в пакете он принадлежит root.
+
+        Смотрится режим файла, а не только права текущего процесса. Под root
+        ``os.access(W_OK)`` отвечает «можно» даже для файла с режимом 444, и
+        приложение правила бы файл пакета, который править не должно. Поэтому
+        бит записи проверяется отдельно.
+        """
+        if not self.builtin_path.is_file() or self.builtin_path == self._broken:
+            return False
+        try:
+            mode = self.builtin_path.stat().st_mode
+        except OSError:
+            return False
+        has_write_bit = bool(mode & (stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH))
+        return has_write_bit and os.access(self.builtin_path, os.W_OK)
 
     def rows(self) -> list[Correction]:
         """Все правки по алфавиту; слово из stress.json перекрывает встроенное."""
