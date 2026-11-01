@@ -169,6 +169,7 @@ def ensure_venv(echo=print) -> Path:
     root = venv_dir()
     if site_packages(root) is not None:
         return root
+    # i18n: нет перевода — журнал установки дополнений в консоли
     echo(f"  создаю окружение: {root}")
     root.parent.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
@@ -179,10 +180,12 @@ def ensure_venv(echo=print) -> Path:
         detail = (result.stderr or result.stdout).strip().splitlines()
         reason = detail[-1] if detail else "без объяснения"
         raise RuntimeError(
+            # i18n: нет перевода — журнал установки дополнений в консоли
             f"окружение не создано: {reason}. "
             f"Проверьте, что стоит python3-venv: sudo apt install python3-venv")
     if site_packages(root) is None:
         raise RuntimeError(
+            # i18n: нет перевода — журнал установки дополнений в консоли
             f"окружение создано, но не видно для python{sys.version_info.major}."
             f"{sys.version_info.minor}: {root}")
     return root
@@ -199,6 +202,7 @@ def install(keys: tuple[str, ...] | list[str] | None = None,
     wanted = list(keys) if keys is not None else list(DEFAULT_KEYS)
     unknown = [key for key in wanted if key not in EXTRAS]
     if unknown:
+        # i18n: нет перевода — журнал установки дополнений в консоли
         raise ValueError(f"неизвестный пакет: {', '.join(unknown)}")
     if not wanted:
         return 0
@@ -206,10 +210,12 @@ def install(keys: tuple[str, ...] | list[str] | None = None,
     root = ensure_venv(echo=echo)
     python = root / "bin" / "python"
     if not python.is_file():
+        # i18n: нет перевода — журнал установки дополнений в консоли
         raise RuntimeError(f"в окружении нет интерпретатора: {python}")
 
     specs = [EXTRAS[key].spec for key in wanted]
     total = sum(EXTRAS[key].size_mb for key in wanted)
+    # i18n: нет перевода — журнал установки дополнений в консоли
     echo(f"  ставлю в окружение: {', '.join(specs)} (~{total} МБ)")
     # Ограничений версий нет намеренно: подбирать их вручную значит
     # поддерживать список самому. pip сам разрешит зависимости от torch,
@@ -219,6 +225,7 @@ def install(keys: tuple[str, ...] | list[str] | None = None,
         check=False,
     )
     if result.returncode != 0:
+        # i18n: нет перевода — журнал установки дополнений в консоли
         echo(f"  ✗ pip вернул {result.returncode}")
         return result.returncode
 
@@ -232,18 +239,23 @@ def install(keys: tuple[str, ...] | list[str] | None = None,
 
 def describe(echo=print) -> None:
     """Что доступно из apt, что в окружении, что ещё нет."""
+    # i18n: нет перевода — журнал установки дополнений в консоли
     echo(f"  окружение: {venv_dir()}")
     packages = site_packages()
+    # i18n: нет перевода — журнал установки дополнений в консоли
     echo(f"  пригодно для python{sys.version_info.major}."
          f"{sys.version_info.minor}: {'да' if packages else 'нет'}")
     if packages:
+        # i18n: нет перевода — журнал установки дополнений в консоли
         echo(f"  пакеты: {packages}")
     echo()
     echo("  Дополнительные пакеты (в apt их нет, ставятся в окружение):")
     for key, extra in EXTRAS.items():
         state = "установлен" if is_installed(extra) else "нет"
+        # i18n: нет перевода — журнал установки дополнений в консоли
         echo(f"    {key:9} {extra.title:12} {state:11} ~{extra.size_mb} МБ")
         echo(f"              {extra.purpose}")
     echo()
     echo("  Установка: silero-tts-reader --install-extras [ключ…]")
+    # i18n: нет перевода — журнал установки дополнений в консоли
     echo(f"  Без ключей ставится: {', '.join(DEFAULT_KEYS)}")
