@@ -718,6 +718,9 @@ class Application(Gtk.Application):
             parent=None,  # постоянного окна у приложения нет
         )
         dialog.on_saved = self._apply_settings
+        # Правки ударений сохраняются из вкладки сразу, мимо «Сохранить»:
+        # их надо применить к живому акцентору, иначе правка не сработает.
+        dialog.on_corrections_changed = self._reload_stress
         self._settings_dialog = dialog
         dialog.connect("destroy", self._on_settings_closed)
         dialog.connect("close-request", self._on_settings_close_request)
@@ -743,6 +746,15 @@ class Application(Gtk.Application):
         # Значок трея мог сменить вариант цвета: переставляем без перезапуска.
         if self._widget is not None:
             self._widget.set_speed(self._config.speed)
+
+    def _reload_stress(self) -> None:
+        """Перечитать правки ударений в живом движке.
+
+        Акцентор создаётся при первой фразе и держит свод правок в памяти,
+        поэтому после вкладки «Правки ударений» его надо разбудить — иначе
+        сохранённая правка не подействует до перезапуска.
+        """
+        self._engine.reload_accents(load_overrides(self._config.stress_file))
 
     def _preview_voice(self, speaker: str, speed: float) -> None:
         self._stop_playback_sync()

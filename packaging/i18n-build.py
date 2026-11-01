@@ -397,6 +397,71 @@ TRANSLATIONS = {
         "💡 When the AI is unreachable or the option is off, a fast built-in "
         "offline phonetiser is used.",
     "Нажмите новую клавишу…": "Press the new key…",
+
+    # правки ударений: вкладка «Правки ударений»
+    "Укажите слово.": "Enter a word.",
+    "Укажите ударение — слово с знаком «+» перед ударной гласной.":
+        "Enter the stressed form: the word with “+” before the stressed vowel.",
+    "В слове не должно быть знака «+»: он ставится в ударении.":
+        "The word must not contain “+”: the mark belongs to the stressed form.",
+    "Слово — только русские буквы, без пробелов и знаков.":
+        "The word may contain Russian letters only, no spaces or punctuation.",
+    "В ударении нет знака «+» — без него правка ничего не меняет.":
+        "The stressed form has no “+”: without it the correction changes nothing.",
+    "Знак «+» ставится ровно один и только перед гласной "
+    "(«звон+ит», а не «зво+нит»).":
+        "Exactly one “+”, and only before a vowel "
+        "(“звон+ит”, not “зво+нит”).",
+    "Буквы ударения не совпадают со словом: правка "
+    "подменила бы одно слово другим.":
+        "The stressed form does not match the word: the correction "
+        "would substitute one word for another.",
+    "Файл встроенных правок принадлежит пакету: "
+    "удалить запись из него нельзя.":
+        "The built-in corrections file belongs to the package: "
+        "a record cannot be removed from it.",
+    "Правку нельзя сохранить.": "The correction cannot be saved.",
+    "ПРАВКИ К СЛОВАРЮ УДАРЕНИЙ": "STRESS DICTIONARY CORRECTIONS",
+    "Слово": "Word",
+    "Ударение": "Stress",
+    "Откуда": "Source",
+    "Слово:": "Word:",
+    "Ударение:": "Stress:",
+    "Сохранить правку": "Save correction",
+    "Удалить": "Delete",
+    "<b>Например:</b> «звон+ит» — знак «+» стоит ПЕРЕД ударной "
+    "гласной, другой нотации модель не понимает.\n"
+    "Встроенные правки сильнее словаря, свои — сильнее встроенных. "
+    "Действуют, пока в «Голос и аудио» не выбрано «Как решит модель».\n"
+    "Правка записывается в файл сразу: «Сохранить» внизу окна "
+    "её не касается.":
+        "<b>For example:</b> “звон+ит” — the “+” stands BEFORE the stressed "
+        "vowel; the model understands no other notation.\n"
+        "Built-in corrections override the dictionary, your own override "
+        "the built-in ones. They apply unless “Let the model decide” is "
+        "selected in “Voice and audio”.\n"
+        "A correction is written to the file at once: the “Save” button at "
+        "the bottom does not apply to it.",
+    "Встроенные правки ({count} шт.): {path}":
+        "Built-in corrections ({count}): {path}",
+    "Свои правки: {path}": "Your corrections: {path}",
+    "Файл пакета принадлежит root: правки сохраняются в файл своих "
+    "правок и остаются при обновлении пакета.":
+        "The package file is owned by root: corrections are saved to your "
+        "own file and survive a package update.",
+    "Встроенную правку в файле пакета удалить нельзя":
+        "A built-in correction cannot be removed from the package file",
+    "Сохранено в {file}: {word} → {form}": "Saved to {file}: {word} → {form}",
+    "(файл пакета только для чтения)": "(package file is read-only)",
+    "Выберите правку в таблице.": "Select a correction in the table.",
+    "Удалено из {file}: {word}": "Removed from {file}: {word}",
+    "Действует встроенная правка.": "The built-in correction applies.",
+    "Файл правок не разобран (битый JSON) — записи не "
+    "сохраняются, чтобы не потерять его содержимое. "
+    "Почините файл и откройте вкладку заново.":
+        "The corrections file could not be parsed (broken JSON) — nothing is "
+        "saved, so that its contents are not lost. Fix the file and reopen "
+        "the tab.",
 }
 
 
