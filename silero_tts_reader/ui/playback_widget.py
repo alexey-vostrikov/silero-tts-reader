@@ -32,9 +32,15 @@ from .window_icon import apply_icon  # noqa: E402
 
 WIDGET_WIDTH = 360
 WIDGET_HEIGHT = 95
-# Полоса текста под прогрессом: две строки мелким шрифтом плюс отступ. Входит
-# в общую высоту окна, иначе надпись обрезалась бы снизу.
-TEXT_BLOCK_HEIGHT = 36
+# Блок текста под прогрессом: три строки с полуторным интервалом плюс отступ. Входит
+# в общую высоту окна, иначе надпись обрезалась бы снизу. Длинная фраза не
+# обрезается, а прокручивается: смысл блока в том, чтобы видеть её целиком.
+TEXT_BLOCK_HEIGHT = 78
+
+# Полуторный интервал между строками текста. Задаётся атрибутом Pango:
+# в CSS межстрочного свойства нет, а pixels-below-lines в GTK4 работает
+# только между абзацами, не между перенесёнными строками.
+LINE_SPACING = 1.5
 CORNER_RADIUS = 14
 
 APP_TITLE = "Silero TTS Reader"
@@ -54,6 +60,19 @@ SPEED_CHOICES = (0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3
 def speed_label(value: float) -> str:
     """Подпись скорости: «1×», «1.25×» — без лишнего нуля."""
     return f"{value:.3g}×"
+
+
+def normalise_for_display(text: str) -> str:
+    """Привести текст к виду, пригодному для показа в узком блоке.
+
+    Переводы строк и табуляции заменяются пробелом, повторные пробелы
+    схлопываются. Переносить строки должен сам блок по своей ширине: иначе
+    в окне видны обрывы там, где в книге кончилась строка файла, а не фраза.
+    """
+    if not text:
+        return ""
+    flat = text.replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    return " ".join(flat.split())
 
 
 class ProgressBar(Gtk.DrawingArea):
@@ -403,17 +422,37 @@ class PlaybackWidget(Gtk.ApplicationWindow):
         # ── Текст, который уходит в синтез ───────────────────────────────────
         # Нужен, чтобы видеть фразу целиком вместе с разметкой: без него
         # неверное ударение выглядит ошибкой синтеза, хотя знак стоит в тексте.
+        #
+        # Это прокручиваемая область с Label: длинная фраза переносится по
+        # словам вниз, а не уезжает за правый край, и при нехватке места
+        # прокручивается. Межстрочный интервал задаётся атрибутом Pango:
+        # в CSS его нет, а свойство вида pixels-below-lines в GTK4 действует
+        # только между абзацами — на перенесённые строки оно не влияет.
+        self._text_scroll = Gtk.ScrolledWindow()
+        self._text_scroll.set_policy(Gtk.PolicyType.NEVER,
+                                     Gtk.PolicyType.AUTOMATIC)
+        # Полоса прокрутки в своей полосе, а не поверх текста: в режиме
+        # overlay она появляется только на время прокрутки, и человек не
+        # видит, что текст продолжается ниже.
+        self._text_scroll.set_overlay_scrolling(False)
+        self._text_scroll.set_hexpand(True)
+        self._text_scroll.add_css_class("playback-text-scroll")
+        self._root.append(self._text_scroll)
+
         self._text_view = Gtk.Label()
         self._text_view.set_xalign(0.0)
         self._text_view.set_yalign(0.0)
         self._text_view.set_wrap(True)
         self._text_view.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
-        self._text_view.set_lines(2)
-        self._text_view.set_ellipsize(Pango.EllipsizeMode.END)
-        self._text_view.add_css_class("playback-text")
+        # Выравнивание по обоим краям: строки одной ширины, кроме последней.
+        self._text_view.set_justify(Gtk.Justification.FILL)
         self._text_view.set_selectable(False)
-        self._text_view.set_text("")
-        self._root.append(self._text_view)
+        self._text_view.add_css_class("playback-text")
+        self._text_scroll.set_child(self._text_view)
+
+        self._text_attrs = Pango.AttrList()
+        self._text_attrs.insert(Pango.attr_line_height_new(LINE_SPACING))
+        self._text_view.set_attributes(self._text_attrs)
 
         # Перетаскивание окна делает WindowHandle (см. _setup_ui), а наведение
         # мыши отменяет автоскрытие: в GTK4 это контроллер, а не сигнал окна.
@@ -427,8 +466,17 @@ class PlaybackWidget(Gtk.ApplicationWindow):
         Пометки не украшаются и не вычищаются: смысл строки в том, чтобы
         видеть ровно то, что получила модель, включая знаки «+» и раскрытые
         сокращения.
+
+        Переводы строк заменяются пробелом. В квант они попадают из книги —
+        перенос внутри абзаца, склейка строк списка, — и в окне выглядели бы
+        как обрыв фразы на середине; переносить должен сам блок по ширине.
         """
-        self._text_view.set_text(text or "")
+        self._text_view.set_text(normalise_for_display(text))
+        # Прокрутка возвращается в начало: иначе новая фраза открывалась бы
+        # на середине, если предыдущую прокрутили.
+        adjustment = self._text_scroll.get_vadjustment()
+        if adjustment is not None:
+            adjustment.set_value(0.0)
 
     def set_menu_model(self, model) -> None:
         """Кнопка меню в виджете: те же действия, что и у клавиш.
@@ -583,12 +631,32 @@ class PlaybackWidget(Gtk.ApplicationWindow):
                 box-shadow: none;
                 padding: 0 4px;
             }}
-            .playback-text {{
+            .playback-text, .playback-text text {{
                 color: {text_colour};
                 font-size: {font_small}px;
                 padding: 0;
                 margin: 0;
                 background: none;
+                border: none;
+                box-shadow: none;
+                outline: none;
+            }}
+            .playback-text-scroll {{
+                background: none;
+                border: none;
+                box-shadow: none;
+                padding: 0;
+                margin: 0;
+            }}
+            .playback-text-scroll scrollbar {{
+                min-width: 4px;
+                background: none;
+                border: none;
+            }}
+            .playback-text-scroll scrollbar slider {{
+                min-width: 4px;
+                border-radius: 2px;
+                background: {track};
             }}
             """,
                 ".playback-window",
@@ -669,6 +737,14 @@ class PlaybackWidget(Gtk.ApplicationWindow):
         progress_bar = getattr(self, "_progress", None)
         if progress_bar is not None:
             progress_bar.set_size_request(-1, progress)
+
+        # Высота блока текста задаётся явно. Без этого поле растягивается под
+        # содержимое, окно не растёт (оно фиксированного размера), и хвост
+        # фразы уходит под обрез без всякой возможности прокрутить.
+        scroll = getattr(self, "_text_scroll", None)
+        if scroll is not None:
+            scroll.set_size_request(-1, text_block)
+
 
         if changed and self._last_theme is not None:
             # Тема описана в CSS фиксированными размерами — переписываем её
