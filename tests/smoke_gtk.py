@@ -226,8 +226,14 @@ dlg = SettingsWindow(
     on_preview_voice=lambda sp, speed: calls.append(("preview", sp, speed)),
     theme_manager=tm,
 )
-check("шесть вкладок: клавиши, голос, правки, вид, позиционирование, ИИ",
-      dlg._notebook.get_n_pages() == 6, str(dlg._notebook.get_n_pages()))
+_tabs = [dlg._notebook.get_tab_label(dlg._notebook.get_nth_page(i)).get_text()
+         for i in range(dlg._notebook.get_n_pages())]
+check("семь вкладок: клавиши, голос, правки, оформление, окно, журнал, ИИ",
+      dlg._notebook.get_n_pages() == 7, str(dlg._notebook.get_n_pages()))
+check("подписи вкладок — текст, а не значки",
+      all(name and name[0].isalpha() for name in _tabs), str(_tabs))
+check("журнал вынесен с вкладки окна",
+      "Журнал" in _tabs and "Окно" in _tabs, str(_tabs))
 check("горячие клавиши подставлены", dlg._hk_selection.get_label() != "", dlg._hk_selection.get_label())
 check("голос ru выбран", dlg.selected_voice() == "xenia", dlg.selected_voice())
 check("голосов ru три", len(dlg._voices_by_lang["ru"]) == 3, str(dlg._voices_by_lang))

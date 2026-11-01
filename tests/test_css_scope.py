@@ -49,6 +49,20 @@ check("комбинатор сохраняется",
 check("псевдокласс сохраняется",
       lines[1] == ".settings-window button:hover { color: blue; }", lines[1])
 
+print("4a. Селектор самого окна области: :scope")
+result = scope_css(":scope { background-color: #101010; }\n:scope label { color: #ffffff; }\n",
+                   ".settings-window")
+lines = result.splitlines()
+check(":scope превращается в класс окна",
+      lines[0] == ".settings-window { background-color: #101010; }", lines[0])
+check(":scope с потомком тоже",
+      lines[1] == ".settings-window label { color: #ffffff; }", lines[1])
+
+print("4b. Узла dialog в GTK4 нет — проверка, что такой селектор не остаётся")
+result = scope_css("dialog { background: red; }\n", ".settings-window")
+check("dialog получает область, но такого узла в GTK4 нет",
+      result.startswith(".settings-window dialog"), result.splitlines()[0])
+
 print("5. Объявления внутри блока не трогаются")
 result = scope_css("button {\n    background-image: none;\n}\n", ".settings-window")
 check("объявление не превращается в селектор",
