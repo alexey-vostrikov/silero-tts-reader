@@ -8,9 +8,15 @@
 """
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
+
+# WM_CLASS — поле оконной системы X11; под Wayland значок ищется по app-id.
+# Backend выбирается при первом обращении к дисплею, поэтому задаётся здесь,
+# до импорта всего, что тянет GTK.
+os.environ.setdefault("GDK_BACKEND", "x11")
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -117,12 +123,70 @@ def test_apply_icon() -> None:
           f"иконка по умолчанию: {Gtk.Window.get_default_icon_name()}")
 
 
+def test_wm_class() -> None:
+    """Имя процесса — то, по которому оконная система ищет значок окна."""
+    print("\n5. Имя процесса для оконной системы")
+    from gi.repository import GLib
+
+    window_icon.set_program_name()
+    check(GLib.get_prgname() == window_icon.APP_ID,
+          f"имя процесса совпадает с app-id: {GLib.get_prgname()}")
+
+    # Настоящее окно: WM_CLASS — то, что видит оконная система. Без панели
+    # проверка пропускается, но не молча: строка ниже объясняет причину.
+    try:
+        import gi
+
+        gi.require_version("Gtk", "4.0")
+        gi.require_version("GdkX11", "4.0")
+        from gi.repository import GdkX11, GLib, Gtk
+        from Xlib import display as xdisplay
+
+        Gtk.init()
+    except Exception as exc:
+        print(f"  — оконной панели нет ({exc.__class__.__name__}), проверка WM_CLASS пропущена")
+        return
+
+    window = Gtk.Window(title="проба значка")
+    try:
+        window.present()
+        # В GTK4 нет Gtk.main_iteration: события прокачиваются через главный
+        # контекст, пока окно не встанет на экран.
+        context = GLib.MainContext.default()
+        surface = None
+        for _ in range(400):
+            while context.pending():
+                context.iteration(False)
+            surface = window.get_surface()
+            if isinstance(surface, GdkX11.X11Surface):
+                break
+        check(isinstance(surface, GdkX11.X11Surface),
+              f"окно получило X11-поверхность: {surface}")
+        xid = surface.get_xid()
+
+        connection = xdisplay.Display()
+        try:
+            prop = connection.create_resource_object("window", xid).get_full_property(
+                connection.intern_atom("WM_CLASS"), 0)
+        finally:
+            connection.close()
+        if prop is None:                      # для проверяющего типов: ниже проверка
+            raise AssertionError("WM_CLASS отсутствует")
+        check(True, "WM_CLASS выставлен")
+        names = [part for part in prop.value.split(b"\0") if part]
+        check(names[0].decode() == window_icon.APP_ID,
+              f"WM_CLASS совпадает с app-id: {names[0].decode()}")
+    finally:
+        window.destroy()
+
+
 def main() -> int:
     print("Значок окна")
     test_contract_with_desktop()
     test_packaging_name()
     test_icon_file()
     test_apply_icon()
+    test_wm_class()
     print(f"\nвсе проверки пройдены: {CHECKS}")
     return 0
 

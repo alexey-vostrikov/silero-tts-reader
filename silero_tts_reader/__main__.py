@@ -14,6 +14,7 @@ from silero_tts_reader.run_options import (
     parse_extras_command,
     parse_run_options,
 )
+from silero_tts_reader.ui.window_icon import set_program_name
 
 PROGRAM = "silero-tts-reader"
 
@@ -82,6 +83,10 @@ def main() -> None:
                 new=info.describe(),
             )
         )
+
+    # Имя процесса = идентификатор приложения: по нему оконная система
+    # сопоставляет окно с ярлыком и берёт значок (см. window_icon).
+    set_program_name()
 
     app = Application(argv, options=options)
     if options.describe():

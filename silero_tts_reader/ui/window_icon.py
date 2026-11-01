@@ -17,12 +17,13 @@ GTK4 выставляет сам из имени программы. Если н
 """
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 import gi
 
 gi.require_version("Gtk", "4.0")
-from gi.repository import Gtk  # noqa: E402
+from gi.repository import GLib, Gtk  # noqa: E402
 
 # Тот же идентификатор, что у GtkApplication (см. app.APP_ID). Обратный порядок
 # домена обязателен: по нему GNOME ищет ru.skala.silero-tts-reader.desktop.
@@ -46,6 +47,24 @@ def icon_file() -> str:
         if candidate.is_file():
             return str(candidate)
     return ""
+
+
+def set_program_name() -> None:
+    """Назвать процесс так, как оконная система ищет значок окна.
+
+    Под Wayland оболочка берёт идентификатор из окна (``_GTK_APPLICATION_ID``)
+    и находит ``.desktop`` — значка хватает. Под X11 и в окружениях, которые
+    сопоставляют окно с ярлыком по ``WM_CLASS``, имя процесса и есть
+    ``WM_CLASS``. По умолчанию GTK берёт его из имени запущенного файла, и у
+    установленного пакета это ``run.py``: с ``StartupWMClass`` в ярлыке такое
+    имя не совпадает, окно остаётся без значка приложения. Здесь процесс
+    называется идентификатором приложения — тем же, что в ярлыке и в
+    ``.desktop``.
+
+    Вызывать до создания окон: ``WM_CLASS`` выставляется при их показе.
+    """
+    with contextlib.suppress(Exception):
+        GLib.set_prgname(APP_ID)
 
 
 def apply_icon(window: Gtk.Window, title: str | None = None) -> None:
