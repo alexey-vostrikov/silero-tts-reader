@@ -464,16 +464,16 @@ class Accentor:
             # Акцентор размечает всё по контексту, поэтому правки пользователя
             # идут после него: свой словарь главнее любой модели.
             marked = silero.mark(text, fallback=self._mark_with_dictionary)
-            return self._apply_overrides(_drop_redundant_marks(marked))
+            return self._apply_fixes(_drop_redundant_marks(marked))
 
         ruaccent = self._ruaccent_backend()
         if ruaccent is not None:
             # ruaccent размечает всё по контексту, поэтому правки пользователя
             # применяются после него: свой словарь главнее любой модели.
             marked = ruaccent.mark(text, fallback=self._mark_with_dictionary)
-            return self._apply_overrides(_drop_redundant_marks(marked))
+            return self._apply_fixes(_drop_redundant_marks(marked))
 
-        return self._mark_with_dictionary(text)
+        return self._apply_fixes(self._mark_with_dictionary(text))
 
     def _mark_with_dictionary(self, text: str) -> str:
         """Разметка словарём: помечаются слова, у которых ударение одно."""
@@ -522,15 +522,40 @@ class Accentor:
                 self._ruaccent = None
         return self._ruaccent
 
-    def _apply_overrides(self, text: str) -> str:
-        """Заменить разметку там, где у пользователя своя правка."""
-        if not self._overrides:
+    def _apply_fixes(self, text: str) -> str:
+        """Поставить правки поверх разметки: сначала встроенные, потом свои.
+
+        Зачем поверх модели. Акцентор размечает текст целиком и ошибается на
+        редких словах: в книге «с будуна» он поставил «буд+уна». Правка в
+        данных при этом не срабатывала вовсе, потому что применялась только к
+        тексту без пометок. Ошибка была не в словаре, а в порядке шагов.
+
+        Порядок: встроенные правки из ``corrections.json``, затем правки
+        пользователя — своё всегда главнее.
+
+        Слово сравнивается без знаков ударения: к этому моменту акцентор уже
+        мог поставить свой, и поиск по «чистому» слову его не нашёл бы.
+        """
+        if not text or (not self._corrections and not self._overrides):
             return text
-        for form in self._overrides.values():
-            pattern = re.compile(rf"\b{re.escape(form.replace(STRESS_MARK, ''))}\b",
-                                 re.IGNORECASE)
-            text = pattern.sub(form, text)
-        return text
+
+        # Правки пользователя сильнее встроенных: при совпадении слова
+        # побеждает он, поэтому его словарь проверяется первым.
+        merged = dict(self._corrections)
+        merged.update(self._overrides)
+
+        def replace(match: re.Match) -> str:
+            token = match.group(0)
+            form = merged.get(token.replace(STRESS_MARK, "").lower())
+            if form is None:
+                return token
+            # Регистр первой буквы сохраняется: правка не должна портить
+            # начало фразы и имена собственные.
+            if token[:1].isupper():
+                return form[:1].upper() + form[1:]
+            return form
+
+        return _WORD_MARKED_RE.sub(replace, text)
 
     @property
     def source(self) -> str:
