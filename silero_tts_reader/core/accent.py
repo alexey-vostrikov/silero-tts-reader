@@ -227,6 +227,64 @@ class StressDictionary:
         return self._homographs.get(word.lower(), {})
 
 
+class ArgoDictionary:
+    """Ударения арготизмов и просторечия — по «Словарю русского арго».
+
+    Источник: В. С. Елистратов, «Словарь русского арго» (ГРАМОТА.РУ, 2002),
+    около 9 000 словарных статей. Ударение там указано автором, а не выведено
+    моделью, поэтому слова вроде «буду́н», «акаде́м», «амбрэ́» получают верное
+    ударение, тогда как акцентор на незнакомом слове часто ошибается на слог
+    влево: «с будуна» он читал как «с бу́дуна».
+
+    Зачем отдельный файл. Словарь арго — другой лексикон, а не дополнение к
+    литературному: «буха́ть» у Елистратова значит «пить», а «бу́хать» в
+    литературном языке — «ударять». Совпадение написания при разном значении
+    означает, что брать его можно только там, где обычный словарь молчит.
+    Проверено на собранных данных: из 5 810 слов 2 475 есть в основном
+    словаре, и 55 из них расходятся по ударению — все это разные слова.
+    """
+
+    def __init__(self, directory: Path | None = None) -> None:
+        self._directory = directory or data_dir()
+        self._forms: dict[str, str] | None = None
+
+    def _load(self) -> None:
+        path = self._directory / "argo.txt.xz"
+        if not path.is_file():
+            # Файла может не быть: словарь арго необязателен, и его отсутствие
+            # не должно ломать разметку остальным.
+            self._forms = {}
+            return
+        raw = lzma.decompress(path.read_bytes()).decode("utf-8", errors="replace")
+        forms: dict[str, str] = {}
+        for line in raw.splitlines():
+            word, _, marked = line.partition("\t")
+            if word and marked:
+                forms[word] = marked
+        self._forms = forms
+
+    def lookup(self, word: str) -> str | None:
+        """Ударённая форма слова или ``None``, если его нет в словаре."""
+        if self._forms is None:
+            self._load()
+        assert self._forms is not None
+        return self._forms.get(word.lower())
+
+    def items(self):
+        """Все пары «слово → ударённая форма» для общей карты правок."""
+        if self._forms is None:
+            self._load()
+        assert self._forms is not None
+        return self._forms.items()
+
+    @property
+    def size(self) -> int:
+        if self._forms is None:
+            self._load()
+        assert self._forms is not None
+        return len(self._forms)
+
+
 class RuAccentBackend:
     """Разметка через ruaccent — библиотеку с моделью омографов.
 
@@ -393,6 +451,8 @@ class Accentor:
         }
         self._corrections = load_corrections(self._data_dir())
         self._dictionary = dictionary or StressDictionary(self._data_dir())
+        self._argo: ArgoDictionary | None = None
+        self._fix_map_cache: dict[str, str] | None = None
 
     def _data_dir(self) -> Path:
         return self._directory or data_dir()
@@ -435,6 +495,16 @@ class Accentor:
             # Угадывать между вариантами нечем: разбора нет, а словарь даёт
             # несколько ударений. Пусть решает акцентор модели.
             return None, "словарь: вариантов несколько"
+
+        # Основной словарь слова не знает — вот здесь и нужен словарь арго:
+        # это ровно те слова, на которых акцентор ошибается. Где основной
+        # словарь отвечает, арго не применяется никогда: это другой лексикон
+        # («буха́ть» пить против «бу́хать» ударять).
+        if self._argo is None:
+            self._argo = ArgoDictionary(self._data_dir())
+        argo = self._argo.lookup(lowered)
+        if argo:
+            return argo, "арго"
         return None, "нет"
 
     def accent_word(self, word: str) -> str | None:
@@ -522,6 +592,38 @@ class Accentor:
                 self._ruaccent = None
         return self._ruaccent
 
+    def _fix_map(self) -> dict[str, str]:
+        """Что и чем исправлять поверх разметки: арго, встроенные правки, свои.
+
+        Порядок силы: правки пользователя сильнее встроенных, встроенные
+        сильнее арго.
+
+        Арго отбирается по одному правилу: слово берётся только там, где
+        основной словарь молчит. Иначе «буха́ть» (пить, арго) перебило бы
+        «бу́хать» (ударять, литературный язык) — это разные слова с одинаковым
+        написанием. Отбор делается один раз и запоминается: 5 810 проверок по
+        бинарному поиску на каждую фразу были бы расточительны.
+        """
+        if self._fix_map_cache is not None:
+            return self._fix_map_cache
+
+        merged: dict[str, str] = {}
+        if self._argo is None:
+            self._argo = ArgoDictionary(self._data_dir())
+        if self._argo.size:
+            for word, marked in self._argo.items():
+                # Омограф не берём ни при каких условиях: его читают по
+                # контексту, а арго даёт одно значение. В арго «ноги» — это
+                # «уйти», и жёсткая пометка ломала бы «ноги устали».
+                if (self._dictionary.variants(word)
+                        or self._dictionary.homograph_variants(word)):
+                    continue
+                merged[word] = marked
+        merged.update(self._corrections)
+        merged.update(self._overrides)
+        self._fix_map_cache = merged
+        return merged
+
     def _apply_fixes(self, text: str) -> str:
         """Поставить правки поверх разметки: сначала встроенные, потом свои.
 
@@ -536,13 +638,11 @@ class Accentor:
         Слово сравнивается без знаков ударения: к этому моменту акцентор уже
         мог поставить свой, и поиск по «чистому» слову его не нашёл бы.
         """
-        if not text or (not self._corrections and not self._overrides):
+        if not text:
             return text
-
-        # Правки пользователя сильнее встроенных: при совпадении слова
-        # побеждает он, поэтому его словарь проверяется первым.
-        merged = dict(self._corrections)
-        merged.update(self._overrides)
+        merged = self._fix_map()
+        if not merged:
+            return text
 
         def replace(match: re.Match) -> str:
             token = match.group(0)

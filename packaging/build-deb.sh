@@ -439,7 +439,7 @@ CONTROL
 # Каждый модуль исходного дерева обязан попасть хоть в один пакет: забытый
 # файл проявляется только на чистой установке, импортом "cannot import name".
 # Данные речи обязаны доехать целиком: без них словарь молча не работает.
-for asset in forms.txt.xz homographs.json.xz corrections.json; do
+for asset in forms.txt.xz homographs.json.xz corrections.json argo.txt.xz; do
     if ! find "$BUILD" -name "$asset" -print -quit | grep -q .; then
         echo "  ✗ данные ударений не попали в пакеты: $asset" >&2
         exit 1
