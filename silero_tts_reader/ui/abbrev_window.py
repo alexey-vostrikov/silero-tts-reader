@@ -282,7 +282,11 @@ class AbbrevWindow(Gtk.Dialog):
         if kind == KIND_EXPANSION:
             self._extra["expansions"][short] = reading
         elif kind == KIND_SPELLED:
-            self._extra["spelled"][short.upper()] = reading or spell_letters(short)
+            # Регистр сохраняется: «СпН» и «СПН» — разные записи, и вторая
+            # нашлась бы шаблоном заглавных, а первая нет. Приводить ввод к
+            # верхнему регистру значит молча подменить то, что человек ввёл.
+            key = short if any(ch.islower() for ch in short) else short.upper()
+            self._extra["spelled"][key] = reading or spell_letters(short)
         else:
             words = self._extra.setdefault("as_word", [])
             if short.upper() not in {w.upper() for w in words}:
@@ -313,8 +317,9 @@ class AbbrevWindow(Gtk.Dialog):
         removed = self._extra.setdefault("removed", [])
         if short in self._extra["expansions"]:
             del self._extra["expansions"][short]
-        elif short.upper() in self._extra["spelled"]:
-            del self._extra["spelled"][short.upper()]
+        elif short in self._extra["spelled"] or short.upper() in self._extra["spelled"]:
+            self._extra["spelled"].pop(short, None)
+            self._extra["spelled"].pop(short.upper(), None)
         else:
             for key in ("expansions", "spelled"):
                 found = [k for k in self._extra[key] if k.upper() == short.upper()]
