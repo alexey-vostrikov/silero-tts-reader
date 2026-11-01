@@ -226,8 +226,8 @@ dlg = SettingsWindow(
     on_preview_voice=lambda sp, speed: calls.append(("preview", sp, speed)),
     theme_manager=tm,
 )
-check("пять вкладок: клавиши, голос, вид, позиционирование, ИИ",
-      dlg._notebook.get_n_pages() == 5, str(dlg._notebook.get_n_pages()))
+check("шесть вкладок: клавиши, голос, правки, вид, позиционирование, ИИ",
+      dlg._notebook.get_n_pages() == 6, str(dlg._notebook.get_n_pages()))
 check("горячие клавиши подставлены", dlg._hk_selection.get_label() != "", dlg._hk_selection.get_label())
 check("голос ru выбран", dlg.selected_voice() == "xenia", dlg.selected_voice())
 check("голосов ru три", len(dlg._voices_by_lang["ru"]) == 3, str(dlg._voices_by_lang))
@@ -251,6 +251,67 @@ dlg._speed_slider.set_value(1.5)
 dlg._theme_combo.set_active(1)  # тёмная
 dlg._btn_preview.emit("clicked")
 check("кнопка «Прослушать» вызывает callback", any(c[0] == "preview" for c in calls), str(calls[-1:]))
+
+# ── Вкладка «Правки ударений» ────────────────────────────────────────────────
+print("\n4a. Вкладка «Правки ударений»")
+from silero_tts_reader.core.accent import load_corrections, load_overrides
+from silero_tts_reader.core.corrections import Corrections
+
+SHIPPED = Path(__file__).resolve().parent.parent / "silero_tts_reader" / "assets" / "stress" / "corrections.json"
+check("таблица заполнена правками из файла",
+      dlg._correction_store.iter_n_children(None) == len(load_corrections(SHIPPED.parent)),
+      str(dlg._correction_store.iter_n_children(None)))
+check("путь к файлу показан", "assets/stress/corrections.json" in
+      dlg._corrections_path.get_text(), dlg._corrections_path.get_text())
+
+# Дальше всё пишется в копии: настоящий corrections.json трогать нельзя.
+RULES = TMP / "rules"
+RULES.mkdir()
+copy = RULES / "corrections.json"
+copy.write_text(SHIPPED.read_text(encoding="utf-8"), encoding="utf-8")
+dlg._corrections = Corrections(copy, TMP / "stress.json")
+dlg._refresh_corrections()
+
+changes: list[bool] = []
+dlg.on_corrections_changed = lambda: changes.append(True)
+dlg._correction_word.set_text("Бодуна")
+dlg._correction_form.set_text("бодун+а")
+dlg._btn_correction_save.emit("clicked")
+check("правка записана в файл", load_corrections(RULES).get("бодуна") == "бодун+а",
+      str(load_corrections(RULES).get("бодуна")))
+check("слово приведено к нижнему регистру", "бодуна" in load_corrections(RULES))
+check("таблица перечитана после записи",
+      dlg._correction_store.iter_n_children(None) == len(load_corrections(RULES)))
+check("живой движок оповещён", changes == [True], str(changes))
+
+dlg._correction_word.set_text("звонят")
+dlg._correction_form.set_text("звоня+т")   # знак перед согласной
+dlg._btn_correction_save.emit("clicked")
+check("негодная правка не записана", "звонят" not in load_corrections(RULES))
+check("отказ объяснён словами", dlg._correction_status.get_text() != "",
+      dlg._correction_status.get_text())
+check("отказ помечен как ошибка", dlg._correction_status.has_css_class("error"))
+
+dlg._correction_word.set_text("замки")
+dlg._correction_form.set_text("замк+и")
+dlg._btn_correction_save.emit("clicked")
+dlg._select_correction("замки")
+dlg._btn_correction_remove.emit("clicked")
+check("удаление убирает запись", "замки" not in load_corrections(RULES))
+
+# Исходник только для чтения — как установленный пакет: правка идёт в свои.
+before = copy.read_text(encoding="utf-8")
+copy.chmod(0o444)
+dlg._corrections.reload()
+check("файл пакета распознан как только для чтения", dlg._corrections.writable is False)
+dlg._correction_word.set_text("жалюзи")
+dlg._correction_form.set_text("жалюз+и")
+dlg._btn_correction_save.emit("clicked")
+check("встроенное слово правится в свои правки",
+      load_overrides(TMP / "stress.json").get("жалюзи") == "жалюз+и",
+      str(load_overrides(TMP / "stress.json")))
+check("встроенный файл не тронут", copy.read_text(encoding="utf-8") == before)
+copy.chmod(0o644)
 
 saved: list[bool] = []
 dlg.on_saved = lambda: saved.append(True)

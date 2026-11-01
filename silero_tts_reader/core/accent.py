@@ -457,6 +457,21 @@ class Accentor:
     def _data_dir(self) -> Path:
         return self._directory or data_dir()
 
+    def reload_fixes(self, overrides: dict[str, str] | None = None) -> None:
+        """Перечитать правки с диска, не трогая словарь и акцентор.
+
+        Нужно после окна настроек: свод правок кэшируется на весь сеанс, и без
+        сброса сохранённая правка не подействовала бы до перезапуска — то есть
+        выглядела бы неработающей. Словарь (36 МБ) при этом не перезагружается.
+        """
+        if overrides is not None:
+            self._overrides = {
+                _decode_stress(word).lower(): form
+                for word, form in overrides.items()
+            }
+        self._corrections = load_corrections(self._data_dir())
+        self._fix_map_cache = None
+
     # ── Одно слово ───────────────────────────────────────────────────────────
 
     def explain(self, word: str) -> tuple[str | None, str]:

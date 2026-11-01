@@ -1,4 +1,4 @@
-"""Диалог настроек: горячие клавиши, голос/аудио, оформление, ИИ (GTK3).
+"""Диалог настроек: клавиши, голос/аудио, правки ударений, вид, окно, ИИ (GTK4).
 
 Переписано с Qt на PyGObject: ``QDialog`` → ``Gtk.Dialog``, ``QTabWidget`` →
 ``Gtk.Notebook``, ``QPushButton`` с перехватом клавиш → ``Gtk.Button`` с
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
+from pathlib import Path
 
 import gi
 
@@ -19,8 +20,24 @@ from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 from .. import i18n  # noqa: E402
 from ..config.config_manager import ConfigManager  # noqa: E402
+from ..core import accent as accent_data  # noqa: E402
 from ..core import extras  # noqa: E402
 from ..core.audio_player import SPEED_AVAILABLE  # noqa: E402
+from ..core.corrections import (  # noqa: E402
+    BROKEN_FILE,
+    EMPTY_FORM,
+    EMPTY_WORD,
+    LAYER_BUILTIN,
+    LAYER_USER,
+    LETTERS_DIFFER,
+    MARK_POSITION,
+    NO_MARK,
+    NOT_A_WORD,
+    READ_ONLY,
+    WORD_HAS_MARK,
+    CorrectionError,
+    Corrections,
+)
 from ..core.hotkey_listener import HotkeyListener  # noqa: E402
 from ..core.text_processor import TextProcessor  # noqa: E402
 from ..i18n import _  # noqa: E402
@@ -29,6 +46,36 @@ from .theme_manager import ThemeManager, rgba  # noqa: E402
 from .window_icon import apply_icon  # noqa: E402
 
 RESPONSE_RESET = 1
+
+
+# ── Отказы проверки правок ───────────────────────────────────────────────────
+
+def _correction_error_text(reason: str) -> str:
+    """Словами то, что проверка вернула кодом: молчаливый отказ хуже ошибки."""
+    return {
+        EMPTY_WORD: _("Укажите слово."),
+        EMPTY_FORM: _("Укажите ударение — слово с знаком «+» перед ударной гласной."),
+        WORD_HAS_MARK: _("В слове не должно быть знака «+»: он ставится в ударении."),
+        NOT_A_WORD: _("Слово — только русские буквы, без пробелов и знаков."),
+        NO_MARK: _("В ударении нет знака «+» — без него правка ничего не меняет."),
+        MARK_POSITION: _("Знак «+» ставится ровно один и только перед гласной "
+                         "(«звон+ит», а не «зво+нит»)."),
+        LETTERS_DIFFER: _("Буквы ударения не совпадают со словом: правка "
+                          "подменила бы одно слово другим."),
+        READ_ONLY: _("Файл встроенных правок принадлежит пакету: "
+                     "удалить запись из него нельзя."),
+        BROKEN_FILE: _("Файл правок не разобран (битый JSON) — записи не "
+                       "сохраняются, чтобы не потерять его содержимое. "
+                       "Почините файл и откройте вкладку заново."),
+    }.get(reason, _("Правку нельзя сохранить."))
+
+
+def _short_path(path: Path) -> str:
+    """Путь с «~» вместо домашнего каталога: длинная строка не влезает в окно."""
+    try:
+        return "~/" + str(Path(path).relative_to(Path.home()))
+    except ValueError:
+        return str(path)
 
 
 # ── Имена клавиш GDK → pynput ────────────────────────────────────────────────
@@ -315,7 +362,7 @@ class HotkeyCapture(Gtk.Button):
 
 
 class SettingsWindow(Gtk.Dialog):
-    """Диалог настроек: горячие клавиши + голос/аудио + оформление + ИИ."""
+    """Диалог настроек: клавиши, голос/аудио, правки ударений, вид, окно, ИИ."""
 
     def __init__(
         self,
@@ -343,6 +390,14 @@ class SettingsWindow(Gtk.Dialog):
         self._pending: dict[str, object] = {}
 
         self.on_saved: Callable[[], None] | None = None
+        # Правки ударений сохраняются сразу, своей кнопкой, а не вместе с
+        # настройками: иначе «Отмена» внизу окна отменяла бы и их.
+        self.on_corrections_changed: Callable[[], None] | None = None
+
+        # Свод правок: поставляемый файл и свои правки из каталога настроек.
+        self._corrections = Corrections(
+            accent_data.data_dir() / "corrections.json", config.stress_file
+        )
 
         # Масштаб интерфейса считаем один раз: он зависит от экрана, а диалог
         # модальный и живёт недолго.
@@ -351,8 +406,8 @@ class SettingsWindow(Gtk.Dialog):
         # показывает серую «шестерёнку» вместо значка приложения.
         apply_icon(self, _("Настройки — Silero TTS Reader"))
 
-        self.set_default_size(round(620 * self._ui_scale),
-                              round(500 * self._ui_scale))
+        self.set_default_size(round(640 * self._ui_scale),
+                              round(560 * self._ui_scale))
         self.set_resizable(False)
         self._content_margin = round(16 * self._ui_scale)
 
@@ -388,10 +443,12 @@ class SettingsWindow(Gtk.Dialog):
                 "#ef4444",
             )
             reset_border = rgba("#ef4444", 0.4)
+            error_fg = "#f87171"
         else:
             bg, fg, muted, pane = "#f8fafc", "#0f172a", "#64748b", "#ffffff"
             entry_bg, border, reset_bg, reset_fg = "#f1f5f9", "#cbd5e1", "#fee2e2", "#dc2626"
             reset_border = "#fca5a5"
+            error_fg = "#dc2626"
 
         provider = Gtk.CssProvider()
         provider.load_from_data(
@@ -447,6 +504,10 @@ class SettingsWindow(Gtk.Dialog):
             button.reset {{ background-color: {reset_bg}; color: {reset_fg}; border: 1px solid {reset_border}; }}
             button.reset:hover {{ background-color: {reset_border}; color: {reset_fg}; }}
             button.secondary {{ background-color: {entry_bg}; color: {muted}; }}
+            label.error {{ color: {error_fg}; font-size: 12px; }}
+            treeview.view {{ background-color: {pane}; color: {fg}; }}
+            treeview.view:selected {{ background-color: {accent}; color: #ffffff; }}
+            treeview header button {{ background-color: transparent; color: {muted}; font-size: 11px; }}
             textview, textview text {{ background-color: {entry_bg}; color: {fg}; }}
             textview {{ border: 1px solid {border}; border-radius: 6px; }}
             scale trough {{ background-color: {border}; border-radius: 2px; min-height: 4px; }}
@@ -470,15 +531,16 @@ class SettingsWindow(Gtk.Dialog):
         self._notebook = Gtk.Notebook()
         self._notebook.append_page(self._build_hotkeys_tab(), Gtk.Label(label="⌨️"))
         self._notebook.append_page(self._build_voice_tab(), Gtk.Label(label="🎭"))
+        self._notebook.append_page(self._build_corrections_tab(), Gtk.Label(label="🔤"))
         self._notebook.append_page(self._build_appearance_tab(), Gtk.Label(label="🎨"))
         self._notebook.append_page(self._build_positioning_tab(), Gtk.Label(label="🪟"))
         self._notebook.append_page(self._build_ai_tab(), Gtk.Label(label="🤖"))
         self._notebook.set_tab_pos(Gtk.PositionType.TOP)
         for index, tip in enumerate(
-            ("Горячие клавиши", "Голос и аудио", "Внешний вид", "Позиционирование окна",
-             "ИИ & Транслитерация")
+            ("Горячие клавиши", "Голос и аудио", "Правки ударений", "Внешний вид",
+             "Позиционирование окна", "ИИ & Транслитерация")
         ):
-            self._notebook.get_nth_page(index).set_tooltip_text(tip)
+            self._notebook.get_nth_page(index).set_tooltip_text(_(tip))
         content.append(self._notebook)
         self._notebook.set_hexpand(True)
 
@@ -1127,6 +1189,221 @@ class SettingsWindow(Gtk.Dialog):
 
         page.append(_spacer)
         return page
+
+    # ── Вкладка «Правки ударений» ────────────────────────────────────────────
+
+    def _build_corrections_tab(self) -> Gtk.Widget:
+        """Свод правок к словарю: посмотреть, добавить, поправить, убрать.
+
+        Правки сохраняются своей кнопкой, сразу при нажатии: они не часть
+        настроек, «Отмена» внизу окна их не касается. Так правку нельзя
+        потерять, закрыв окно, и нельзя случайно оставить «на потом».
+        """
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        page.set_margin_top(12)
+        page.set_margin_bottom(12)
+        page.set_margin_start(12)
+        page.set_margin_end(12)
+
+        group = Gtk.Frame(label=_("ПРАВКИ К СЛОВАРЮ УДАРЕНИЙ"))
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_margin_top(10)
+        box.set_margin_bottom(10)
+        box.set_margin_start(10)
+        box.set_margin_end(10)
+        group.set_child(box)
+        page.append(group)
+
+        self._corrections_path = Gtk.Label(label="")
+        self._corrections_path.set_xalign(0.0)
+        self._corrections_path.set_wrap(True)
+        self._corrections_path.set_name("hint")
+        box.append(self._corrections_path)
+
+        # Таблица ниже формы: строк десятки, и работать с ними удобнее, когда
+        # поля и кнопки всегда на виду, а список занимает остаток высоты.
+        form = Gtk.Grid(row_spacing=6, column_spacing=8)
+        form.attach(self._label(_("Слово:")), 0, 0, 1, 1)
+        self._correction_word = Gtk.Entry()
+        self._correction_word.set_width_chars(14)
+        self._correction_word.connect("activate", self._on_correction_save)
+        form.attach(self._correction_word, 1, 0, 1, 1)
+        form.attach(self._label(_("Ударение:")), 2, 0, 1, 1)
+        self._correction_form = Gtk.Entry()
+        self._correction_form.set_width_chars(14)
+        self._correction_form.connect("activate", self._on_correction_save)
+        form.attach(self._correction_form, 3, 0, 1, 1)
+        box.append(form)
+
+        buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self._btn_correction_save = Gtk.Button(label=_("Сохранить правку"))
+        self._btn_correction_save.connect("clicked", self._on_correction_save)
+        buttons.append(self._btn_correction_save)
+        self._btn_correction_remove = Gtk.Button(label=_("Удалить"))
+        self._btn_correction_remove.add_css_class("reset")
+        self._btn_correction_remove.connect("clicked", self._on_correction_remove)
+        buttons.append(self._btn_correction_remove)
+        box.append(buttons)
+
+        self._correction_status = Gtk.Label(label="")
+        self._correction_status.set_xalign(0.0)
+        self._correction_status.set_wrap(True)
+        box.append(self._correction_status)
+
+        # Таблица, а не список в рамке: правок десятки, и глазами ищут по
+        # слову, а не по порядку в файле.
+        self._correction_store = Gtk.ListStore(str, str, str)
+        self._correction_view = Gtk.TreeView(model=self._correction_store)
+        self._correction_view.set_headers_visible(True)
+        for title, index in ((_("Слово"), 0), (_("Ударение"), 1), (_("Откуда"), 2)):
+            column = Gtk.TreeViewColumn(
+                title, Gtk.CellRendererText(), text=index
+            )
+            column.set_resizable(True)
+            self._correction_view.append_column(column)
+        self._correction_selection = self._correction_view.get_selection()
+        self._correction_selection.connect(
+            "changed", self._on_correction_selected
+        )
+
+        scroller = Gtk.ScrolledWindow()
+        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroller.set_child(self._correction_view)
+        scroller.set_vexpand(True)
+        scroller.set_min_content_height(round(140 * self._ui_scale))
+        box.append(scroller)
+
+        hint = Gtk.Label(
+            label=_("<b>Например:</b> «звон+ит» — знак «+» стоит ПЕРЕД ударной "
+                    "гласной, другой нотации модель не понимает.\n"
+                    "Встроенные правки сильнее словаря, свои — сильнее встроенных. "
+                    "Действуют, пока в «Голос и аудио» не выбрано «Как решит модель».\n"
+                    "Правка записывается в файл сразу: «Сохранить» внизу окна "
+                    "её не касается.")
+        )
+        hint.set_use_markup(True)
+        hint.set_xalign(0.0)
+        hint.set_wrap(True)
+        hint.set_name("hint")
+        box.append(hint)
+
+        self._refresh_corrections()
+
+        _spacer = Gtk.Box()
+
+        _spacer.set_hexpand(True)
+
+        page.append(_spacer)
+        return page
+
+    def _layer_title(self, layer: str) -> str:
+        """Имя файла слоя: по нему видно, откуда взялась правка."""
+        return self._corrections.path_for(layer).name
+
+    def _refresh_corrections(self) -> None:
+        """Перезаполнить таблицу по файлам на диске."""
+        self._correction_store.clear()
+        for row in self._corrections.rows():
+            self._correction_store.append(
+                [row.word, row.form, self._layer_title(row.layer)]
+            )
+        self._update_corrections_path()
+
+    def _update_corrections_path(self) -> None:
+        """Пути обоих файлов и предупреждение, если поставляемый только читается."""
+        builtin = self._corrections.builtin_path
+        lines = [
+            _("Встроенные правки ({count} шт.): {path}").format(
+                count=len(self._corrections.rows()), path=_short_path(builtin)),
+            _("Свои правки: {path}").format(
+                path=_short_path(self._corrections.user_path)),
+        ]
+        if not self._corrections.writable:
+            # Молчать нельзя: правка уйдёт не туда, куда смотрит пользователь.
+            lines.append(_(
+                "Файл пакета принадлежит root: правки сохраняются в файл своих "
+                "правок и остаются при обновлении пакета."))
+        broken = self._corrections.broken
+        if broken is not None:
+            self._set_correction_status(
+                _correction_error_text(BROKEN_FILE) + f" ({broken})", error=True)
+        self._corrections_path.set_text("\n".join(lines))
+
+    def _set_correction_status(self, text: str, error: bool = False) -> None:
+        self._correction_status.set_text(text)
+        if error:
+            self._correction_status.add_css_class("error")
+        else:
+            self._correction_status.remove_css_class("error")
+
+    def _on_correction_selected(self, selection) -> None:
+        """Показать выбранную строку в полях — с ней и работают дальше."""
+        model, tree_iter = selection.get_selected()
+        if tree_iter is None:
+            self._btn_correction_remove.set_sensitive(False)
+            return
+        self._correction_word.set_text(model[tree_iter][0])
+        self._correction_form.set_text(model[tree_iter][1])
+        word = model[tree_iter][0]
+        removable = self._corrections.can_remove(word)
+        self._btn_correction_remove.set_sensitive(removable)
+        self._btn_correction_remove.set_tooltip_text(
+            "" if removable
+            else _("Встроенную правку в файле пакета удалить нельзя")
+        )
+
+    def _select_correction(self, word: str) -> None:
+        """Встать на строку слова: после сохранения видно, что получилось."""
+        for row in self._correction_store:
+            if row[0] == word:
+                self._correction_selection.select_iter(row.iter)
+                return
+
+    def _on_correction_save(self, _widget=None) -> None:
+        """Проверить и записать правку. Отказ виден словами, а не молчанием."""
+        word = self._correction_word.get_text().strip().lower()
+        form = self._correction_form.get_text().strip()
+        previous = self._corrections.layer_of(word)
+        try:
+            saved = self._corrections.save(word, form)
+        except CorrectionError as exc:
+            self._set_correction_status(_correction_error_text(exc.reason), error=True)
+            return
+        self._refresh_corrections()
+        self._select_correction(saved.word)
+        message = _("Сохранено в {file}: {word} → {form}").format(
+            file=self._layer_title(saved.layer), word=saved.word, form=saved.form)
+        if previous == LAYER_BUILTIN and saved.layer == LAYER_USER:
+            message += " " + _("(файл пакета только для чтения)")
+        self._set_correction_status(message)
+        if self.on_corrections_changed:
+            self.on_corrections_changed()
+
+    def _on_correction_remove(self, _button=None) -> None:
+        """Убрать правку из того слоя, где она лежит."""
+        model, tree_iter = self._correction_selection.get_selected()
+        if tree_iter is None:
+            self._set_correction_status(_("Выберите правку в таблице."), error=True)
+            return
+        word = model[tree_iter][0]
+        layer = self._corrections.layer_of(word)
+        try:
+            removed = self._corrections.remove(word)
+        except CorrectionError as exc:
+            self._set_correction_status(_correction_error_text(exc.reason), error=True)
+            return
+        self._refresh_corrections()
+        message = _("Удалено из {file}: {word}").format(
+            file=self._layer_title(removed), word=word)
+        if removed == LAYER_USER and layer == LAYER_USER:
+            # Слово могло остаться во встроенном слое: об этом честнее сказать,
+            # чем показать внезапно вернувшееся значение без объяснения.
+            self._select_correction(word)
+            if self._corrections.layer_of(word) is not None:
+                message += " " + _("Действует встроенная правка.")
+        self._set_correction_status(message)
+        if self.on_corrections_changed:
+            self.on_corrections_changed()
 
     # ── Вспомогательное ──────────────────────────────────────────────────────
 

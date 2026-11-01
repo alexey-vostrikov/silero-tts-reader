@@ -250,6 +250,20 @@ class TTSEngine:
     def model_path(self) -> str:
         return str(self._paths.get(DEFAULT_LANG, ""))
 
+    def reload_accents(self, overrides: dict[str, str] | None = None) -> None:
+        """Перечитать правки ударений после окна настроек.
+
+        Акцентор живёт весь сеанс и кэширует свод правок: без сброса
+        сохранённая в настройках правка осталась бы на бумаге до перезапуска.
+        Пересоздавать акцентор нельзя — вместе с ним из файла заново
+        развернулся бы словарь на 1,5 млн словоформ, а он не изменился.
+        """
+        if overrides is not None:
+            self._accent_overrides = overrides
+        accentor = self._accentor
+        if accentor is not None:
+            accentor.reload_fixes(self._accent_overrides)
+
     # ── Внутреннее ────────────────────────────────────────────────────────────
 
     def _load_model(self, lang: str) -> None:
