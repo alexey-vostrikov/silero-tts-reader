@@ -9,7 +9,7 @@ from collections.abc import Callable
 import numpy as np
 
 from . import rate as rate_module
-from .tts_worker import TTSWorker
+from .tts_worker import Speech, TTSWorker
 
 # Скорость меняет rubberband-cli: он в зависимостях пакета, а Python-обёртка
 # pyrubberband в архиве Ubuntu отсутствует. Раньше требовались оба, поэтому в
@@ -92,6 +92,7 @@ class AudioPlayer(threading.Thread):
     Signals (called from the player thread, but safe to connect to Qt slots):
         on_started()                 — playback begun
         on_segment_progress(float)  — 0.0–1.0 progress within current segment
+        on_segment_text(str)        — текст, ушедший в синтез для этого кванта
         on_paused()
         on_resumed()
         on_finished()                — all audio consumed
@@ -108,6 +109,7 @@ class AudioPlayer(threading.Thread):
         total_segments: int = 0,
         on_started: Callable[[], None] | None = None,
         on_segment_progress: Callable[[float], None] | None = None,
+        on_segment_text: Callable[[str], None] | None = None,
         on_paused: Callable[[], None] | None = None,
         on_resumed: Callable[[], None] | None = None,
         on_finished: Callable[[], None] | None = None,
@@ -127,6 +129,9 @@ class AudioPlayer(threading.Thread):
         # Callbacks
         self._on_started = on_started
         self._on_segment_progress = on_segment_progress
+        # Текст кванта, который начал звучать: в нём видны сокращения и
+        # ударения ровно такими, какими их получил синтез.
+        self._on_segment_text = on_segment_text
         # Сколько всего квантов в тексте: полоска должна показывать
         # место в книге, а не «сколько сыграно от предложения».
         self._total_segments = int(total_segments)
@@ -142,10 +147,10 @@ class AudioPlayer(threading.Thread):
         self._seek_fraction_request: float | None = None
         # Возврат к предыдущему кванту: очередь расходуется по одному, поэтому
         # сыгранное хранится отдельно, а повтор идёт мимо очереди.
-        self._history: deque[np.ndarray] = deque(maxlen=HISTORY_DEPTH)
-        self._pending: list[np.ndarray] = []
+        self._history: deque[Speech] = deque(maxlen=HISTORY_DEPTH)
+        self._pending: list[Speech] = []
         # Повтор фразы: массив и доля, с которой начинать (0.5 — середина).
-        self._replay: tuple[np.ndarray, float] | None = None
+        self._replay: tuple[Speech, float] | None = None
         self._back_requested = False
         self._next_requested = False
         self._previous_request = False
@@ -247,10 +252,10 @@ class AudioPlayer(threading.Thread):
                 if self._replay is not None:
                     # Возврат: этот квант играется немедленно, отложенный
                     # (текущий) ждёт в pending до своего конца.
-                    raw, start_fraction = self._replay
+                    speech, start_fraction = self._replay
                     self._replay = None
                 elif self._pending:
-                    raw = self._pending.pop()
+                    speech = self._pending.pop()
                 else:
                     try:
                         item = self._queue.get(timeout=0.2)
@@ -260,9 +265,9 @@ class AudioPlayer(threading.Thread):
                     if TTSWorker.is_done_sentinel(item):
                         break
 
-                    raw: np.ndarray = item  # type: ignore[assignment]
+                    speech = item
 
-                audio = raw
+                audio = speech.audio
                 current_speed = self.speed
                 if current_speed != 1.0 and SPEED_AVAILABLE:
                     audio = self._stretch(audio, current_speed)
@@ -280,19 +285,23 @@ class AudioPlayer(threading.Thread):
                 self._segment_index += 1
                 self._back_requested = False
                 self._next_requested = False
+                # Текст — до звука: окно успевает показать фразу, которую
+                # человек вот-вот услышит, а не после неё.
+                if self._on_segment_text is not None:
+                    self._on_segment_text(speech.text)
                 self._play_segment(audio, stream, start_fraction)
                 if self._next_requested:
                     # Переход к следующей фразе: текущая остаётся в истории, но
                     # в pending не идёт — её хвост пропускается намеренно.
-                    self._history.append(raw)
+                    self._history.append(speech)
                     first = False
                     continue
                 if self._back_requested:
                     # Текущий квант отложен: после повторного предыдущего он
                     # должен прозвучать снова, поэтому пропускать его нельзя.
-                    self._pending.append(raw)
+                    self._pending.append(speech)
                 else:
-                    self._history.append(raw)
+                    self._history.append(speech)
                 first = False
 
         if self._stop_event.is_set():

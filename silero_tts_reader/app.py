@@ -529,6 +529,7 @@ class Application(Gtk.Application):
             total_segments=total_quanta,
             on_started=lambda: self._ui(self._on_playback_started),
             on_segment_progress=lambda v: self._ui(self._on_segment_progress, v),
+            on_segment_text=lambda t: self._ui(self._on_segment_text, t),
             on_paused=lambda: self._ui(self._on_playback_paused),
             on_resumed=lambda: self._ui(self._on_playback_resumed),
             on_finished=lambda: self._ui(self._on_playback_finished),
@@ -609,6 +610,11 @@ class Application(Gtk.Application):
         log.info("Отладка: чтение закончено — выхожу")
         self._quit()
         return False
+
+    def _on_segment_text(self, text: str) -> None:
+        """Показать фразу, которую синтез получил: с разметкой и сокращениями."""
+        if self._widget is not None:
+            self._widget.set_segment_text(text)
 
     def _on_segment_progress(self, value: float) -> None:
         if self._widget is not None:

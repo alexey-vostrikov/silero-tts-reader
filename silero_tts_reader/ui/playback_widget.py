@@ -21,7 +21,8 @@ import gi
 
 gi.require_version("Gdk", "4.0")
 gi.require_version("Gtk", "4.0")
-from gi.repository import Gdk, GLib, Gtk  # noqa: E402
+gi.require_version("Pango", "1.0")
+from gi.repository import Gdk, GLib, Gtk, Pango  # noqa: E402
 
 from ..core.audio_player import SEEK_STEP, SPEED_AVAILABLE  # noqa: E402
 from ..i18n import _  # noqa: E402
@@ -31,6 +32,9 @@ from .window_icon import apply_icon  # noqa: E402
 
 WIDGET_WIDTH = 360
 WIDGET_HEIGHT = 95
+# Полоса текста под прогрессом: две строки мелким шрифтом плюс отступ. Входит
+# в общую высоту окна, иначе надпись обрезалась бы снизу.
+TEXT_BLOCK_HEIGHT = 36
 CORNER_RADIUS = 14
 
 APP_TITLE = "Silero TTS Reader"
@@ -273,6 +277,7 @@ class PlaybackWidget(Gtk.ApplicationWindow):
             "width": WIDGET_WIDTH, "height": WIDGET_HEIGHT,
             "button": 30, "corner": CORNER_RADIUS,
             "font_label": 13, "font_button": 12, "font_small": 11, "progress": 4,
+            "text_block": TEXT_BLOCK_HEIGHT,
         }
         self._last_theme: tuple[bool, str] | None = None
 
@@ -395,11 +400,35 @@ class PlaybackWidget(Gtk.ApplicationWindow):
         self._speed_combo.connect("notify::selected", self._on_speed_selected)
         progress_row.append(self._speed_combo)
 
+        # ── Текст, который уходит в синтез ───────────────────────────────────
+        # Нужен, чтобы видеть фразу целиком вместе с разметкой: без него
+        # неверное ударение выглядит ошибкой синтеза, хотя знак стоит в тексте.
+        self._text_view = Gtk.Label()
+        self._text_view.set_xalign(0.0)
+        self._text_view.set_yalign(0.0)
+        self._text_view.set_wrap(True)
+        self._text_view.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        self._text_view.set_lines(2)
+        self._text_view.set_ellipsize(Pango.EllipsizeMode.END)
+        self._text_view.add_css_class("playback-text")
+        self._text_view.set_selectable(False)
+        self._text_view.set_text("")
+        self._root.append(self._text_view)
+
         # Перетаскивание окна делает WindowHandle (см. _setup_ui), а наведение
         # мыши отменяет автоскрытие: в GTK4 это контроллер, а не сигнал окна.
         motion = Gtk.EventControllerMotion()
         motion.connect("enter", self._on_enter)
         self._root.add_controller(motion)
+
+    def set_segment_text(self, text: str) -> None:
+        """Показать фразу, ушедшую в синтез, — как есть, с разметкой.
+
+        Пометки не украшаются и не вычищаются: смысл строки в том, чтобы
+        видеть ровно то, что получила модель, включая знаки «+» и раскрытые
+        сокращения.
+        """
+        self._text_view.set_text(text or "")
 
     def set_menu_model(self, model) -> None:
         """Кнопка меню в виджете: те же действия, что и у клавиш.
@@ -439,6 +468,9 @@ class PlaybackWidget(Gtk.ApplicationWindow):
         font_label = self._metrics.get("font_label", 13)
         font_button = self._metrics.get("font_button", 12)
         font_small = self._metrics.get("font_small", 11)
+        # Текст синтеза — вспомогательный: он не должен перетягивать внимание
+        # с кнопок, поэтому приглушён относительно основного текста.
+        text_colour = "rgba(226, 232, 240, 0.72)" if is_dark else "rgba(15, 23, 42, 0.70)"
 
         if is_dark:
             fg = "#e2e8f0"
@@ -551,6 +583,13 @@ class PlaybackWidget(Gtk.ApplicationWindow):
                 box-shadow: none;
                 padding: 0 4px;
             }}
+            .playback-text {{
+                color: {text_colour};
+                font-size: {font_small}px;
+                padding: 0;
+                margin: 0;
+                background: none;
+            }}
             """,
                 ".playback-window",
             ).encode()
@@ -595,7 +634,8 @@ class PlaybackWidget(Gtk.ApplicationWindow):
         base = int(area.width * 0.26)
         # Пределы: не мельче исходного и не шире трети экрана
         width = max(WIDGET_WIDTH, min(base, int(area.width * 0.34), 900))
-        height = int(width * WIDGET_HEIGHT / WIDGET_WIDTH)
+        text_block = max(TEXT_BLOCK_HEIGHT, round(TEXT_BLOCK_HEIGHT * width / WIDGET_WIDTH))
+        height = int(width * WIDGET_HEIGHT / WIDGET_WIDTH) + text_block
         button = max(30, round(30 * width / WIDGET_WIDTH))
         corner = max(CORNER_RADIUS, round(CORNER_RADIUS * width / WIDGET_WIDTH))
 
@@ -614,7 +654,7 @@ class PlaybackWidget(Gtk.ApplicationWindow):
             "width": width, "height": height, "button": button,
             "corner": corner, "scale": scale, "font_label": font_label,
             "font_button": font_button, "font_small": font_small,
-            "progress": progress,
+            "progress": progress, "text_block": text_block,
         })
         self.set_size_request(width, height)
 
