@@ -408,12 +408,52 @@ def test_widget_text_room() -> None:
     from silero_tts_reader.ui import playback_widget as pw
 
     widget = pw.PlaybackWidget()
+
+    def shown_text() -> str:
+        return widget._text_view.get_text()
+
     widget.set_segment_text("Лет+ёха был скор+ее всег+о с бодун+а.")
-    check(widget._text_view.get_text() == "Лет+ёха был скор+ее всег+о с бодун+а.",
-          f"надпись показывает строку с разметкой: {widget._text_view.get_text()!r}")
-    check(widget._text_view.get_wrap(), "длинная фраза переносится, а не обрезается")
-    check(widget._text_view.get_lines() >= 2,
-          f"строк под текст: {widget._text_view.get_lines()}")
+    check(shown_text() == "Лет+ёха был скор+ее всег+о с бодун+а.",
+          f"надпись показывает строку с разметкой: {shown_text()!r}")
+    check(widget._text_view.get_wrap(),
+          "длинная фраза переносится вниз, а не уходит за правый край")
+    check(widget._text_view.get_wrap_mode() == pw.Pango.WrapMode.WORD_CHAR,
+          "перенос по словам, а не по буквам")
+
+    # Переводы строк не показываются: перенос делает сам блок по ширине.
+    widget.set_segment_text("Первая строка файла.\nВторая строка файла.\n\nТретья.")
+    check("\n" not in shown_text(),
+          f"переводов строк в надписи нет: {shown_text()!r}")
+    check(shown_text() == "Первая строка файла. Вторая строка файла. Третья.",
+          f"строки склеены в одну фразу: {shown_text()!r}")
+
+    # Выравнивание по ширине.
+    check(widget._text_view.get_justify() == Gtk.Justification.FILL,
+          "текст выравнивается по обоим краям")
+
+    # Полуторный интервал задаётся атрибутом Pango: у свойства вида в GTK4
+    # другое назначение — оно даёт отступ между абзацами, а не строками.
+    check(pw.LINE_SPACING == 1.5, f"интервал задан: {pw.LINE_SPACING}")
+    attrs = widget._text_view.get_attributes()
+    check(attrs is not None, "атрибуты текста заведены")
+    # Проверяется сам атрибут: AttrList в PyGObject не имеет итератора,
+    # поэтому значение достаётся из его строкового вида.
+    check(attrs is not None and "line-height" in attrs.to_string(),
+          f"межстрочный интервал в атрибутах: {attrs.to_string() if attrs else None}")
+    check(attrs is not None and "1.5" in attrs.to_string(),
+          f"интервал равен 1,5: {attrs.to_string() if attrs else None}")
+
+    # Длинная фраза не обрезается: она продолжается вниз и прокручивается.
+    long_text = ("Дверь скрипнула, и в комнату вошёл человек в сером пальто. "
+                 "Он долго смотрел на окна, потом достал ключ и открыл замки.") * 3
+    widget.set_segment_text(long_text)
+    check(long_text in shown_text(),
+          "длинный текст сохранён целиком, а не обрезан по границе")
+    policy = widget._text_scroll.get_policy()
+    check(policy[1] == Gtk.PolicyType.AUTOMATIC,
+          f"вертикальная прокрутка доступна: {policy}")
+    check(not widget._text_scroll.get_overlay_scrolling(),
+          "полоса прокрутки не скрывается поверх текста")
 
     # Высота окна включает блок текста: иначе надпись обрезалась бы снизу.
     width = widget._metrics["width"]
@@ -423,7 +463,7 @@ def test_widget_text_room() -> None:
           f"высота {height} больше прежней {without_text} на блок текста")
 
     widget.set_segment_text("")
-    check(widget._text_view.get_text() == "", "пустой текст очищает надпись")
+    check(shown_text() == "", "пустой текст очищает надпись")
     widget.destroy()
 
 
