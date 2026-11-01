@@ -308,6 +308,23 @@ jobs:
           assert ok
           PY
 
+          # Значок после установки: имя находится в теме, то есть файлы легли
+          # туда, где их ищет оболочка.
+          xvfb-run -a python3 - <<'PY'
+          import gi
+          gi.require_version("Gtk", "4.0")
+          from gi.repository import Gtk
+          Gtk.init()
+          theme = Gtk.IconTheme.new()
+          theme.set_theme_name("hicolor")
+          for size in (24, 48, 256):
+              info = theme.lookup_icon("silero-tts-reader", None, size, 1,
+                                       Gtk.TextDirection.LTR, 0)
+              path = info.get_file().get_path() if info and info.get_file() else None
+              assert path, f"значок {size} px не найден в теме"
+              print(f"  ✓ значок {size} px: {path}")
+          PY
+
           # Запускатор обязан внятно сказать про отсутствующие pip-модули
           # (sounddevice и torch в архиве Ubuntu отсутствуют), а не падать трассировкой.
           set +e
