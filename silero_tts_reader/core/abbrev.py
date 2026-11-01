@@ -122,6 +122,11 @@ class Abbreviations:
 
         Длинные первыми: иначе «до н.э.» совпадёт как «н.э.», и останется
         «до нашей эры» с лишним словом.
+
+        Записи смешанного регистра («СпН», «МосГорСправка») ищутся отдельно и
+        с учётом регистра. Шаблон заглавных их не ловит вовсе — он требует,
+        чтобы все буквы были заглавными, — поэтому без этого шага «СпН»
+        уходило в синтез как есть, хотя ответ был известен.
         """
         items = [(key, value) for key, value in self._data["expansions"].items()]
         items.sort(key=lambda item: len(item[0]), reverse=True)
@@ -134,6 +139,24 @@ class Abbreviations:
             patterns.append((pattern, value))
         return patterns
 
+    def _mixed_case_patterns(self) -> list[tuple[re.Pattern, str]]:
+        """Записи вроде «СпН»: точное совпадение, регистр важен.
+
+        Регистр здесь несёт смысл, поэтому IGNORECASE не годится: «спн» в
+        строчных буквах — это уже не та аббревиатура, а часть обычного слова.
+        """
+        patterns: list[tuple[re.Pattern, str]] = []
+        for key, value in self._data["spelled"].items():
+            if key == key.upper():
+                continue          # целиком заглавные — их берёт общий шаблон
+            if not any(ch.islower() for ch in key):
+                continue
+            pattern = re.compile(rf"(?<![\w]){re.escape(key)}(?![\w])")
+            patterns.append((pattern, value))
+        # Длинные первыми — по той же причине, что и у расшифровок.
+        patterns.sort(key=lambda item: len(item[0].pattern), reverse=True)
+        return patterns
+
     # ── Расшифровка ──────────────────────────────────────────────────────────
 
     def expand(self, text: str) -> str:
@@ -142,6 +165,9 @@ class Abbreviations:
             return text
         result = text
         for pattern, replacement in self._patterns:
+            result = pattern.sub(replacement, result)
+
+        for pattern, replacement in self._mixed_case_patterns():
             result = pattern.sub(replacement, result)
 
         spelled = self._data["spelled"]
