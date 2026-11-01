@@ -48,6 +48,7 @@ class TTSEngine:
         accent_mode: str = "off",
         accent_overrides: dict[str, str] | None = None,
         abbreviations: str = "off",
+        abbreviations_extra: dict | None = None,
         stress_source: str = "auto",
     ) -> None:
         self._sample_rate = sample_rate
@@ -58,6 +59,9 @@ class TTSEngine:
         self._accentor = None
         self._stress_source = stress_source
         self._abbrev_mode = abbreviations
+        # Правки пользователя: свои расшифровки, словочитаемые аббревиатуры
+        # и список выключенных встроенных записей.
+        self._abbrev_extra = abbreviations_extra or {}
         self._abbrev = None
         self._paths: dict[str, Path] = {}
         for lang, path in (models or {}).items():
@@ -250,6 +254,17 @@ class TTSEngine:
     def model_path(self) -> str:
         return str(self._paths.get(DEFAULT_LANG, ""))
 
+    def reload_abbreviations(self, extra: dict | None = None) -> None:
+        """Перечитать правки сокращений после редактора.
+
+        Раскрытие строится один раз и держит свод правил в памяти. Без сброса
+        добавленная аббревиатура подействовала бы только после перезапуска —
+        ровно та же ошибка, что была с правками ударений.
+        """
+        if extra is not None:
+            self._abbrev_extra = extra
+        self._abbrev = None
+
     def reload_accents(self, overrides: dict[str, str] | None = None) -> None:
         """Перечитать правки ударений после окна настроек.
 
@@ -352,7 +367,8 @@ class TTSEngine:
             from .abbrev import Abbreviations
 
             self._abbrev = Abbreviations(
-                generic=self._abbrev_mode == "all")
+                generic=self._abbrev_mode == "all",
+                extra=self._abbrev_extra)
         return self._abbrev.expand(text)
 
     def _apply_accents(self, text: str) -> str:

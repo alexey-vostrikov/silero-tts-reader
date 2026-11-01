@@ -311,6 +311,40 @@ TRANSLATIONS = {
     "Середина прошлой фразы, её начало или −5 секунд":
         "Middle of previous sentence, its start, or −5 seconds",
     "Следующая фраза или +5 секунд": "Next sentence or +5 seconds",
+    "Сокращения…": "Abbreviations…",
+    "Сокращения сохранены": "Abbreviations saved",
+    "Сокращения и аббревиатуры": "Abbreviations and acronyms",
+    "Расшифровка: «т.д.» → «так далее»": "Expansion: “т.д.” → “так далее”",
+    "По буквам: «ВДВ» → «вэ дэ вэ»": "Letter by letter: “ВДВ” → “вэ дэ вэ”",
+    "Как слово: «ВУЗ» читается «вуз», а не по буквам":
+        "As a word: “ВУЗ” reads as “вуз”, not letter by letter",
+    "Аббревиатуру можно прочитать по буквам или как слово, а сокращение — "
+    "заменить целой фразой. Выключенная встроенная запись не удаляется из "
+    "пакета: её можно вернуть, снова включив.":
+        "An abbreviation can be read letter by letter or as a word, and a "
+        "short form can be replaced by a whole phrase. A disabled built-in "
+        "entry is not deleted from the package: it can be restored by "
+        "enabling it again.",
+    "Как читать это сокращение": "How to read this abbreviation",
+    "пусто — по буквам; «вэ дэ вэ» — своё чтение":
+        "empty — letter by letter; “вэ дэ вэ” — custom reading",
+    "Добавить": "Add",
+    "Выключить выбранное": "Disable selected",
+    "Вернуть встроенные": "Restore built-in",
+    "Убрать все выключения из списка": "Clear every disabled entry",
+    "Проверить:": "Check:",
+    "читается словом": "read as a word",
+    "своё": "custom",
+    "встроено": "built-in",
+    "Впишите сокращение": "Enter the abbreviation",
+    "Для расшифровки нужно, чем заменить": "An expansion needs replacement text",
+    "Выберите строку в списке": "Select a row in the list",
+    "Без изменений: {text}": "Unchanged: {text}",
+    "Изменить…": "Edit…",
+    "Свой список: какие аббревиатуры читать по буквам, какие словом, "
+    "какие сокращения раскрывать":
+        "Your own list: which abbreviations to spell out, which to read as "
+        "words, which short forms to expand",
     "Сокращения:": "Abbreviations:",
     "Известные и сокращения с точкой": "Known ones and dotted forms",
     "Все заглавные — по буквам": "All capitals letter by letter",
