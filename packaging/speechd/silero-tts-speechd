@@ -254,8 +254,19 @@ def cmd_status() -> int:
 
     voices = list_voices()
     if not voices:
-        print("список голосов получить не удалось: нет spd-say или демона")
-        return 1
+        # Пустой список — это не «модуль настроен неверно», а «проверить нечем»:
+        # демон не запущен (контейнер без systemd, свежая загрузка) или нет
+        # spd-say. Подключение к speechd.conf уже проверено выше, поэтому
+        # состояние отличается от отказа кодом 3, иначе установка в чистой
+        # системе выглядит сломанной, хотя конфигурация в порядке.
+        has_client = shutil.which("spd-say") is not None
+        if has_client:
+            print("проверить голоса не удалось: демон speech-dispatcher не запущен")
+            print("запустить:  systemctl --user start speech-dispatcher")
+        else:
+            print("проверить голоса не удалось: нет spd-say (пакет speech-dispatcher)")
+        print("конфигурация при этом подключена — включение прошло успешно")
+        return 3
     if has_our_voices(voices):
         ours = sum(1 for line in voices
                    if "xenia" in line.lower() or "aidar" in line.lower())

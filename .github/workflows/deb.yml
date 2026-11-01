@@ -360,7 +360,17 @@ jobs:
           test "$(grep -c 'AddModule "silero-tts"' /etc/speech-dispatcher/speechd.conf)" -eq 1
           silero-tts-speechd enable        # повторный запуск ничего не дублирует
           test "$(grep -c 'AddModule "silero-tts"' /etc/speech-dispatcher/speechd.conf)" -eq 1
+          # Коды status: 0 — подключён и голоса видны, 1 — отказ, 3 — проверить
+          # нечем (демон не запущен: в контейнере нет systemd). Третий код здесь
+          # ожидаем и не означает поломку: подключение уже сверено grep'ом выше.
+          set +e
           silero-tts-speechd status
+          status_rc=$?
+          set -e
+          case "$status_rc" in
+            0|3) ;;
+            *) echo "status вернул $status_rc — это отказ, а не «проверить нечем»"; exit 1 ;;
+          esac
           echo "  ✓ модуль включается идемпотентно"
 
           # Демон должен разобрать конфиг модуля без ошибок. Звука в контейнере

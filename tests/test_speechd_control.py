@@ -148,5 +148,35 @@ check("запись идёт только в speechd.conf",
 check("в конфиг не дописываются голоса",
       "AddVoice" not in write_body and "GenericLanguage" not in write_body)
 
+print("11. Коды возврата status различают отказ и «проверить нечем»")
+# В контейнере без systemd демона нет, и голоса получить нечем. Это не то же
+# самое, что неподключённый модуль: иначе чистая установка выглядит сломанной,
+# хотя конфигурация в порядке. Проверяется именно различие кодов.
+_real_conf = speechd.read_conf
+_real_voices = speechd.list_voices
+_real_which = speechd.shutil.which
+try:
+    speechd.read_conf = lambda: f"{speechd.ADD_LINE}\n"
+    speechd.list_voices = lambda: ["NAME LANGUAGE VARIANT", "xenia ru FEMALE1"]
+    speechd.shutil.which = lambda name: "/usr/bin/spd-say"
+    check("подключён и голоса видны — код 0", speechd.cmd_status() == 0)
+
+    speechd.list_voices = list
+    check("демона нет — код 3, а не отказ", speechd.cmd_status() == 3)
+
+    speechd.shutil.which = lambda name: None
+    check("нет spd-say — тоже 3", speechd.cmd_status() == 3)
+
+    speechd.read_conf = lambda: ""
+    check("модуль не подключён — код 1", speechd.cmd_status() == 1)
+
+    speechd.read_conf = lambda: f"{speechd.ADD_LINE}\n"
+    speechd.list_voices = lambda: ["NAME LANGUAGE VARIANT", "Russian+Adam ru Adam"]
+    check("демон есть, но наших голосов нет — код 1", speechd.cmd_status() == 1)
+finally:
+    speechd.read_conf = _real_conf
+    speechd.list_voices = _real_voices
+    speechd.shutil.which = _real_which
+
 print(f"\nИТОГ: успешно {checks - failures}, провалено {failures}")
 sys.exit(1 if failures else 0)
