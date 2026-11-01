@@ -193,7 +193,16 @@ book = Corrections(broken, tmp2 / "none.json")
 check("пропавший файл — не ошибка", book.broken is None, str(book.broken))
 
 print("\n7. Акцентор перечитывает правки без перезагрузки словаря")
-acc = Accentor(mode=MODE_DICT, directory=tmp2)
+# Данные словаря копируются во временный каталог: без них акцентор падает на
+# загрузке форм, и проверка перечитывания правок превращается в проверку
+# наличия словаря. В CI Silero Stress не установлен, поэтому подмены источника
+# нет — нужны настоящие файлы, а не пустой каталог.
+DATA = ROOT / "silero_tts_reader" / "assets" / "stress"
+for name in ("forms.txt.xz", "homographs.json.xz", "argo.txt.xz"):
+    source = DATA / name
+    if source.is_file():
+        (tmp2 / name).write_bytes(source.read_bytes())
+acc = Accentor(mode=MODE_DICT, directory=tmp2, source="dictionary")
 builtin = tmp2 / "corrections.json"
 book = Corrections(builtin, user)
 book.save("висят", "вис+ят")
