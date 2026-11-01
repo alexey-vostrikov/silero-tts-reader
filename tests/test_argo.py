@@ -81,6 +81,32 @@ def test_fills_gap() -> None:
               f"«{word}» → {form!r} ({who})")
 
 
+def test_boduna() -> None:
+    """Слово, из-за которого словарь и собирался, получает верное ударение.
+
+    В книге «Выжить» стоит «с будуна». По статье Елистратова «будун» —
+    равноправный вариант «бодун», ударение на второй слог: буду́н, а в
+    родительном — будуна́. Акцентор ставил ударение на слог раньше.
+
+    Именительный «будун» приходит из словаря арго, форма «будуна» — из правки
+    corrections.json: падежных форм арго не содержит, там только заголовки.
+    """
+    print("\n2б. «будун» и «с будуна» — верное ударение")
+    argo = ArgoDictionary(DATA)
+    form = argo.lookup("будун")
+    if form is not None:
+        check(form == "буд+ун", f"именительный из арго: {form!r}")
+    else:
+        print("  — арго ещё не пересобран со всеми вариантами заголовка")
+
+    plain = Accentor(mode=MODE_DICT, directory=DATA, source="dictionary")
+    check(not plain._dictionary.variants("будуна"),
+          "основной словарь этого слова не знает")
+    out = plain._apply_fixes("с буд+уна весь помятый")
+    check(out == "с будун+а весь помятый",
+          f"разметка акцентора исправлена правкой: {out}")
+
+
 def test_dictionary_wins() -> None:
     """Где основной словарь отвечает, арго не применяется."""
     print("\n3. Основной словарь сильнее арго")
@@ -142,6 +168,7 @@ def test_missing_file() -> None:
 def main() -> int:
     test_format()
     test_fills_gap()
+    test_boduna()
     test_dictionary_wins()
     test_applied_over_model()
     test_map_is_built_once()
