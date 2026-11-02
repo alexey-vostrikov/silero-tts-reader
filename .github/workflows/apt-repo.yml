@@ -78,6 +78,7 @@ jobs:
         with:
           files: debs/*/*.deb
           signing_key: ${{ secrets.APT_SIGNING_KEY }}
+          signing_passphrase: ${{ secrets.APT_SIGNING_PASSPHRASE }}
           keep_versions: 5
           distribution: stable
           component: main
