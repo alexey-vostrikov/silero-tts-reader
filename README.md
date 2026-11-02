@@ -100,6 +100,40 @@
 
 ## 🚀 Быстрая установка
 
+### Из apt-репозитория (Ubuntu 26.04)
+
+Пакеты лежат в подписанном репозитории на GitHub Pages — пять последних релизов,
+любая версия ставится выбором версии:
+
+```bash
+sudo install -d -m 0755 /usr/share/keyrings
+curl -fsSL https://alexey-vostrikov.github.io/silero-tts-reader/apt-key.asc \
+  | sudo tee /usr/share/keyrings/silero-tts.asc >/dev/null
+echo "deb [signed-by=/usr/share/keyrings/silero-tts.asc] https://alexey-vostrikov.github.io/silero-tts-reader/repo stable main" \
+  | sudo tee /etc/apt/sources.list.d/silero-tts.list
+sudo apt update
+sudo apt install silero-tts-reader silero-tts-speechd speech-dispatcher-silero-tts
+```
+
+Ключ подписи — `9B07F1FCE5BA09DE`, файл в armored-виде (`apt-key.asc`); рядом
+лежит и бинарный `apt-key.gpg` для тех, кто кладёт ключ в `/etc/apt/keyrings`.
+
+Обновление и откат:
+
+```bash
+sudo apt update && sudo apt upgrade silero-tts-reader
+apt list --all-versions -a silero-tts-reader         # что доступно
+sudo apt install silero-tts-reader=0.3.0+gtk         # вернуться на прошлую версию
+```
+
+Выбор версии работает, потому что в репозитории лежат все пять последних релизов
+целиком (`silero-tts-common`, `silero-tts-reader`, `silero-tts-speechd`,
+`speech-dispatcher-silero-tts` одной версии). Репозиторий обновляется сам при
+публикации релиза.
+
+Требуется Ubuntu 26.04: `Depends` включает `libgtk4-layer-shell0`, а в 24.04 этого
+пакета в архиве нет. Для 24.04 — установка из `.deb` (см. ниже).
+
 ### Автоматическая установка (Рекомендуется)
 
 Клонируйте репозиторий и запустите скрипт автоматической установки:
