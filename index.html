@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<title>Silero TTS Reader — apt-репозиторий</title>
+<style>
+ body { font: 15px/1.6 system-ui, sans-serif; max-width: 46em; margin: 3em auto; padding: 0 1em; color: #1f2933; }
+ pre { background: #f4f4f5; padding: .8em 1em; border-radius: 6px; overflow-x: auto; }
+ code { font-family: ui-monospace, monospace; }
+ h1 { font-size: 1.5em; }
+</style>
+<h1>apt-репозиторий</h1>
+<p>Пакеты последних пяти выпусков. В репозитории лежат все версии сразу, поэтому
+можно поставить конкретную.</p>
+<h2>Подключить</h2>
+<pre><code>sudo install -d -m 0755 /usr/share/keyrings
+curl -fsSL https://alexey-vostrikov.github.io/silero-tts-reader/apt-key.gpg \
+  | sudo tee /usr/share/keyrings/apt-key.gpg &gt; /dev/null
+echo "deb [signed-by=/usr/share/keyrings/apt-key.gpg] \
+https://alexey-vostrikov.github.io/silero-tts-reader/repo stable main" \
+  | sudo tee /etc/apt/sources.list.d/apt-key.list
+sudo apt update</code></pre>
+<h2>Поставить</h2>
+<pre><code>sudo apt install silero-tts-reader</code></pre>
+<h2>Поставить конкретную версию</h2>
+<pre><code>apt list -a silero-tts-reader
+sudo apt install silero-tts-reader=&lt;версия&gt;</code></pre>
+</html>
