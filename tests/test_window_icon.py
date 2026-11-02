@@ -74,6 +74,10 @@ def test_packaging_name() -> None:
           "файл ставится под этим именем")
     check(not re.search(r'applications/\$READER\.desktop', script),
           "старого имени файла ($READER.desktop) не осталось")
+    # Сборка подставляла app-id в StartupWMClass, и ярлык расходился с кодом:
+    # пакет ставил домен, а окно представлялось коротким классом.
+    check("StartupWMClass=$APP_ID" not in script,
+          "сборка не подменяет StartupWMClass на app-id")
 
 
 def test_icon_file() -> None:
