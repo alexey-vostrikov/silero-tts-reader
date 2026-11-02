@@ -733,10 +733,17 @@ class SettingsWindow(Gtk.Dialog):
         self._voice_view.get_selection().connect("changed", self._on_voice_selected)
         voice_scroll = Gtk.ScrolledWindow()
         voice_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        voice_scroll.set_min_content_height(120)
+        # Полоса прокрутки занимает своё место, а не ложится поверх строк.
+        voice_scroll.set_overlay_scrolling(False)
         voice_scroll.set_child(self._voice_view)
         voice_box.append(voice_scroll)
         voice_scroll.set_hexpand(True)
+        self._voice_scroll = voice_scroll
+        # Высота списка — целое число строк. При фиксированных 120 px при высоте
+        # строки 23 px последняя строка обрезалась посередине. Мерить надо на
+        # показанной странице, поэтому пересчёт идёт при каждом показе вкладки.
+        voice_scroll.connect("map", lambda _w: self._fit_voice_list())
+        GLib.idle_add(self._fit_voice_list)
 
         preview_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self._btn_preview = Gtk.Button(label=_("▶  Прослушать"))
@@ -1201,6 +1208,11 @@ class SettingsWindow(Gtk.Dialog):
         grid.set_margin_end(10)
         llm_group.set_child(grid)
         page.append(llm_group)
+        self._llm_group = llm_group
+        # Настройки без включённого ИИ ни на что не влияют, а выглядят рабочими.
+        # Гасим блок и держим его состояние в согласии с флажком.
+        self._chk_use_llm.connect("toggled", lambda c: llm_group.set_sensitive(c.get_active()))
+        llm_group.set_sensitive(self._chk_use_llm.get_active())
 
         self._llm_provider_combo = Gtk.ComboBoxText()
         for label, value in (
@@ -1241,10 +1253,13 @@ class SettingsWindow(Gtk.Dialog):
         self._txt_system_prompt = Gtk.TextView()
         self._txt_system_prompt.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
         self._txt_system_prompt.get_buffer().set_text(self._config.transliteration_system_prompt)
-        self._txt_system_prompt.set_size_request(-1, 65)
+        self._txt_system_prompt.set_size_request(-1, round(104 * self._ui_scale))
         self._txt_system_prompt.set_tooltip_text(_("Системный промпт ИИ с правилом расстановки знака ударения '+'"))
         prompt_scroll = Gtk.ScrolledWindow()
         prompt_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        # Полоса прокрутки в своём столбце, а не поверх текста: при наложении
+        # она перекрывала последнюю строку промпта.
+        prompt_scroll.set_overlay_scrolling(False)
         prompt_scroll.set_child(self._txt_system_prompt)
         grid.attach(self._field_label(_("Системный промпт ИИ:"), self._txt_system_prompt), 0, 4, 1, 1)
         grid.attach(prompt_scroll, 1, 4, 1, 1)
@@ -1526,6 +1541,27 @@ class SettingsWindow(Gtk.Dialog):
                 # в дереве доступности.
                 control.update_property([Gtk.AccessibleProperty.LABEL], [text])
         return label
+
+    def _fit_voice_list(self) -> bool:
+        """Подогнать высоту списка голосов под целое число строк.
+
+        Высота строки зависит от темы, поэтому фиксированное значение в
+        пикселях неверно: при 120 px и строке 23 px последняя строка
+        обрезалась посередине. Показываем ровно пять строк и меряем высоту на
+        деле, а не предполагаем её.
+        """
+        rows = 5
+        row_height = 0
+        try:
+            area = self._voice_view.get_cell_area(Gtk.TreePath.new_from_indices([0]), None)
+            row_height = area.height
+        except (AttributeError, TypeError):
+            row_height = 0
+        if row_height <= 0:
+            row_height = round(23 * getattr(self, "_ui_scale", 1.0))
+        if getattr(self, "_voice_scroll", None) is not None:
+            self._voice_scroll.set_min_content_height(row_height * rows)
+        return False
 
     def _label_width(self) -> int:
         """Ширина колонки подписей, достаточная для самой длинной.
