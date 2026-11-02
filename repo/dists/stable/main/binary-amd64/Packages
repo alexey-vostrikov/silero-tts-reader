@@ -1,0 +1,102 @@
+Package: silero-tts-common
+Version: 0.3.1+gtk
+Architecture: all
+Maintainer: Alexey Vostrikov <avostrikov@gmail.com>
+Installed-Size: 3404
+Homepage: https://github.com/alexey-vostrikov/silero-tts-reader
+Depends: python3 (>= 3.10), python3-numpy, python3-scipy
+Recommends: python3-sounddevice, python3-torch, python3-pynput, zstd, python3-venv
+Suggests: python3-pyrubberband
+Priority: optional
+Section: sound
+Filename: pool/main/s/silero-tts-common/silero-tts-common_0.3.1+gtk_all.deb
+Size: 3071588
+SHA256: 1bf84e79ad548d6b5576e0dc4d23a9e1813a5eeccb6069b1bb2c6edb0e36471f
+SHA1: f10d15171c7df6e1d381787394a71744f4fcfe34
+MD5sum: 8f65f59b924db6514b6884fb5085a7eb
+Description: Silero TTS shared settings, configuration and synthesis engine
+ Common part of the Silero TTS packages: interface translations (ru_RU is the
+ source language, en_US ships as a gettext catalog), the configuration file
+ manager
+ (~/.config/silero-tts-reader/config.json), the multi-language model registry
+ (~/.local/share/silero-tts-reader), the synthesis engine with text
+ segmentation, and silero-tts-model for listing and downloading models.
+ Contains no user interface: the GTK application lives in silero-tts-reader,
+ the command line tool in silero-tts-speechd.
+ .
+ Русская модель v5_ru.pt ставится отдельно и в пакет не входит; английская
+ (v3_en.pt, 55 МБ) качается командой silero-tts-model download en.
+
+Package: silero-tts-reader
+Version: 0.3.1+gtk
+Architecture: all
+Maintainer: Alexey Vostrikov <avostrikov@gmail.com>
+Installed-Size: 644
+Homepage: https://github.com/alexey-vostrikov/silero-tts-reader
+Depends: silero-tts-common (= 0.3.1+gtk), python3 (>= 3.10), python3-gi, gir1.2-glib-2.0, gir1.2-gtk-4.0, libgtk4-layer-shell0, python3-xlib
+Recommends: python3-sounddevice, python3-torch, python3-pynput, python3-evdev, gsettings-desktop-schemas, xdotool, xclip, python3-venv
+Suggests: python3-pyrubberband
+Priority: optional
+Section: sound
+Filename: pool/main/s/silero-tts-reader/silero-tts-reader_0.3.1+gtk_all.deb
+Size: 139284
+SHA256: a12eeec9f528b74350378605bef0292004d2d38e4b4a329a8f7f7c8b23539904
+SHA1: 864830b8efaec4d9d160ea1add4d90483a7b10ac
+MD5sum: c93a35541c175300e590dcc6b2e0a84f
+Description: Silero TTS reader with global hotkeys and system tray
+ Reads the selected text or the clipboard aloud using the Silero TTS v5 model.
+ Hotkeys are configurable, transliteration of Latin words can be done with a
+ local LLM, and the SILERO v5 model is loaded from ~/.local/share/silero-tts-reader.
+ .
+ Интерфейс на GTK 3 (PyGObject): плавающий виджет воспроизведения, окно настроек,
+ иконка в трее (AppIndicator на Wayland, StatusIcon на X11).
+
+Package: silero-tts-speechd
+Version: 0.3.1+gtk
+Architecture: all
+Maintainer: Alexey Vostrikov <avostrikov@gmail.com>
+Installed-Size: 96
+Homepage: https://github.com/alexey-vostrikov/silero-tts-reader
+Depends: silero-tts-common (= 0.3.1+gtk), python3 (>= 3.10)
+Recommends: python3-sounddevice, python3-torch
+Suggests: speech-dispatcher-silero-tts
+Priority: optional
+Section: sound
+Filename: pool/main/s/silero-tts-speechd/silero-tts-speechd_0.3.1+gtk_all.deb
+Size: 15352
+SHA256: c0efd6c9b9f8f4cf459bcc4b2260fe1057bee4ad082799a97bb31bf4b342323d
+SHA1: 812ef35abfb8edc47def0d4c2f29b4c22de1bea0
+MD5sum: 8cada6279db218a477e0a587fadc6214
+Description: Silero TTS command line and speech-dispatcher control tool
+ Provides silero-tts-speak, which synthesises text with the Silero v5 model and
+ plays it from the command line (or writes a WAV file), and silero-tts-speechd,
+ which enables or disables the speech-dispatcher output module described by the
+ speech-dispatcher-silero-tts package.
+ .
+ Как и приложение, требует torch и sounddevice (в Ubuntu 26.04 это пакеты
+ python3-torch и python3-sounddevice); запускатор объясняет, чего не хватает,
+ вместо падения трассировкой.
+
+Package: speech-dispatcher-silero-tts
+Version: 0.3.1+gtk
+Architecture: all
+Maintainer: Alexey Vostrikov <avostrikov@gmail.com>
+Installed-Size: 52
+Homepage: https://github.com/alexey-vostrikov/silero-tts-reader
+Depends: silero-tts-speechd (= 0.3.1+gtk), speech-dispatcher (>= 0.10)
+Priority: optional
+Section: sound
+Filename: pool/main/s/speech-dispatcher-silero-tts/speech-dispatcher-silero-tts_0.3.1+gtk_all.deb
+Size: 5664
+SHA256: 1fba38fde682fb741d518194c4b613eeb22c5fa8c787e0a1c745dde955bf1917
+SHA1: 6cb10f7dd314f26f3528e38875e6956def7857ff
+MD5sum: c18bb7430545e1d1f8cb5a8dcfd7c0b9
+Description: Silero TTS output module configuration for speech-dispatcher
+ Adds the Silero TTS v5 voices as an output module of speech-dispatcher, so any
+ Speech Dispatcher client (spd-say, Orca, Firefox reader mode and others) can
+ speak through the local Silero model.
+ .
+ Only the module configuration is shipped: the stock sd_generic plugin is used,
+ and synthesis is done by silero-tts-speak from the silero-tts-speechd package.
+ Enable it with "sudo silero-tts-speechd enable".
+
