@@ -28,6 +28,10 @@ jobs:
   publish:
     name: собрать репозиторий
     runs-on: ubuntu-latest
+    # Ключ подписи и его пароль — секреты окружения apt-signing с обязательным
+    # подтверждением: прогон стоит перед выкладкой, пока ревьюер не разрешит.
+    # Действие прибито к коммиту, а не к тегу: тег можно передвинуть.
+    environment: apt-signing
     steps:
       - uses: actions/checkout@v4
         with:
@@ -74,7 +78,8 @@ jobs:
           echo "всего файлов: $total"
 
       - name: Опубликовать
-        uses: alexey-vostrikov/apt-repo-action@v1
+        # v1 = 90c8086e4be51c1f3411aa8c46efc893973cf979
+        uses: alexey-vostrikov/apt-repo-action@90c8086e4be51c1f3411aa8c46efc893973cf979
         with:
           files: debs/*/*.deb
           signing_key: ${{ secrets.APT_SIGNING_KEY }}
