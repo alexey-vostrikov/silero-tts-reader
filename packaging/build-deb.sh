@@ -296,9 +296,11 @@ chmod 0755 "$READER_ROOT/usr/bin/$READER"
 # ищет иконку и .desktop именно по app-id окна. С прежним именем
 # silero-tts-reader.desktop рабочий стол показывал вместо значка «шестерёнку».
 APP_ID=ru.skala.silero-tts-reader
+# StartupWMClass — это класс окна из WM_CLASS (короткое имя латиницей), а не
+# app-id: под X11 сопоставление идёт по нему. Подставляем значение из ярлыка
+# как есть, чтобы сборка не расходилась с кодом.
 sed -e 's|^Exec=.*|Exec=silero-tts-reader|' \
     -e 's|^Icon=.*|Icon=silero-tts-reader|' \
-    -e "s|^StartupWMClass=.*|StartupWMClass=$APP_ID|" \
     silero-tts-reader.desktop > "$READER_ROOT/usr/share/applications/$APP_ID.desktop"
 chmod 0644 "$READER_ROOT/usr/share/applications/$APP_ID.desktop"
 # в системный автозапуск пакет не лезет: пользователь решает сам
