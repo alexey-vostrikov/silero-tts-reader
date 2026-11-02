@@ -1,16 +1,16 @@
 name: apt repo
 
-# Публикует deb-пакеты в apt-репозиторий на GitHub Pages.
+# Публикует deb-пакеты пяти последних тегов в apt-репозиторий на GitHub Pages.
 #
-# Раскладка: ветка gh-pages, каталог repo/. Установка:
+# Действие своё (.github/actions/apt-repo) и работает на aptly: reprepro,
+# на котором стоит готовая smeinecke/apt-repo-action, в одной ветке держит
+# только последнюю версию пакета и удаляет файлы старых. aptly держит все
+# версии, поэтому пять тегов живут в одной ветке stable и ставятся выбором
+# версии (apt install silero-tts-reader=0.3.0+gtk).
+#
+# Установка:
 #   deb [signed-by=/usr/share/keyrings/silero-tts.gpg] \
 #       https://alexey-vostrikov.github.io/silero-tts-reader/repo stable main
-#
-# Почему отдельная ветка на каждый тег. reprepro (движок
-# smeinecke/apt-repo-action) в одной ветке (`suite`) держит только последнюю
-# версию пакета: проверил — из пяти загруженных остаётся одна, а старые файлы
-# он удаляет как более не нужные. Поэтому «пять последних тегов» = пять suite,
-# по одному на тег, плюс `stable` с содержимым самого свежего тега.
 
 on:
   release:
@@ -25,84 +25,61 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  matrix:
-    name: какие теги публиковать
+  publish:
+    name: собрать репозиторий
     runs-on: ubuntu-latest
-    outputs:
-      include: ${{ steps.tags.outputs.include }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           fetch-tags: true
-      - id: tags
-        name: пять последних тегов
+
+      - name: Пять последних тегов
+        id: tags
         run: |
           set -euo pipefail
-          # Сортировка по версии, а не по дате: тег может появиться позже, но
-          # быть старее по номеру.
+          # По версии, а не по дате: тег может появиться позже, будучи старее
+          # по номеру версии.
           mapfile -t tags < <(git tag --sort=-v:refname | head -5)
           if [ "${#tags[@]}" -eq 0 ]; then
             echo "нет ни одного тега — публиковать нечего" >&2
             exit 1
           fi
-          newest="${tags[0]}"
-          # stable первым: он должен существовать до того, как в него что-то
-          # положат, а содержимое берётся из самого свежего тега.
-          include="[{\"tag\":\"${newest}\",\"codename\":\"stable\"}"
-          for tag in "${tags[@]}"; do
-            include+=",{\"tag\":\"${tag}\",\"codename\":\"${tag}\"}"
-          done
-          include+="]"
-          echo "include=${include}" >> "$GITHUB_OUTPUT"
           printf '  %s\n' "${tags[@]}"
+          echo "tags=${tags[*]}" >> "$GITHUB_OUTPUT"
 
-  publish:
-    name: ${{ matrix.codename }}
-    needs: matrix
-    runs-on: ubuntu-latest
-    strategy:
-      # Ветка gh-pages одна на всех: параллельные job'ы затрут друг друга.
-      max-parallel: 1
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.matrix.outputs.include) }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Скачать deb из релиза ${{ matrix.tag }}
+      - name: Скачать deb из этих релизов
         env:
           GH_TOKEN: ${{ github.token }}
+          TAGS: ${{ steps.tags.outputs.tags }}
         run: |
           set -euo pipefail
-          # Комплект полный: четыре пакета на каждый тег. Неполный релиз —
-          # ошибка, а не повод собрать репозиторий наполовину.
-          gh release download "${{ matrix.tag }}" \
-            --repo "${{ github.repository }}" \
-            --pattern '*_all.deb' \
-            --dir "debs/${{ matrix.tag }}"
-          count="$(ls -1 debs/${{ matrix.tag }}/*.deb | wc -l)"
-          echo "скачано файлов: $count"
-          if [ "$count" -ne 4 ]; then
-            echo "ожидалось 4 пакета, получено $count" >&2
-            ls -la "debs/${{ matrix.tag }}" >&2
-            exit 1
-          fi
+          total=0
+          for tag in $TAGS; do
+            mkdir -p "debs/$tag"
+            # Комплект полный: четыре пакета на тег. Неполный релиз — ошибка,
+            # а не повод опубликовать половину.
+            gh release download "$tag" \
+              --repo "${{ github.repository }}" \
+              --pattern '*_all.deb' \
+              --dir "debs/$tag"
+            count="$(ls -1 "debs/$tag"/*.deb 2>/dev/null | wc -l)"
+            echo "  $tag: $count пакетов"
+            if [ "$count" -ne 4 ]; then
+              echo "в релизе $tag ожидалось 4 пакета, получено $count" >&2
+              exit 1
+            fi
+            total=$((total + count))
+          done
+          echo "всего файлов: $total"
 
-      - name: Положить в репозиторий (${{ matrix.codename }})
-        uses: smeinecke/apt-repo-action@v2.2.1
+      - name: Опубликовать
+        uses: alexey-vostrikov/apt-repo-action@v1
         with:
+          files: debs/*/*.deb
+          signing_key: ${{ secrets.APT_SIGNING_KEY }}
+          keep_versions: 5
+          distribution: stable
+          component: main
+          architectures: amd64
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          repo_supported_arch: |
-            amd64
-          repo_supported_version: |
-            ${{ matrix.codename }}
-          file: debs/${{ matrix.tag }}/*_all.deb
-          file_target_version: ${{ matrix.codename }}
-          private_key: ${{ secrets.APT_SIGNING_KEY }}
-          public_key: ${{ secrets.APT_SIGNING_PUBKEY }}
-          # Повторный прогон по тому же тегу — не ошибка.
-          skip_duplicates: true
