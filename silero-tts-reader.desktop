@@ -10,6 +10,6 @@ Categories=Accessibility;Utility;
 MimeType=text/plain;application/x-fictionbook+xml;application/x-zip-compressed-fb2;
 Keywords=tts;text;speech;silero;read;book;fb2;
 StartupNotify=false
-StartupWMClass=ru.skala.silero-tts-reader
+StartupWMClass=SileroTtsReader
 X-GNOME-Autostart-enabled=true
 X-GNOME-UsesNotifications=true

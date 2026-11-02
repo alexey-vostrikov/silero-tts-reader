@@ -23,13 +23,17 @@ from pathlib import Path
 import gi
 
 gi.require_version("Gtk", "4.0")
-from gi.repository import GLib, Gtk  # noqa: E402
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 # Тот же идентификатор, что у GtkApplication (см. app.APP_ID). Обратный порядок
 # домена обязателен: по нему GNOME ищет ru.skala.silero-tts-reader.desktop.
 APP_ID = "ru.skala.silero-tts-reader"
 ICON_NAME = "silero-tts-reader"
 APP_TITLE = "Silero TTS Reader"
+# Пара WM_CLASS для X11: имя программы и класс. Класс совпадает со
+# StartupWMClass в ярлыке; домена здесь быть не должно.
+WM_INSTANCE = ICON_NAME
+WM_CLASS = "SileroTtsReader"
 
 _default_icon_set = False
 
@@ -50,21 +54,33 @@ def icon_file() -> str:
 
 
 def set_program_name() -> None:
-    """Назвать процесс так, как оконная система ищет значок окна.
+    """Назвать окно так, как оконная система ищет значок приложения.
 
-    Под Wayland оболочка берёт идентификатор из окна (``_GTK_APPLICATION_ID``)
-    и находит ``.desktop`` — значка хватает. Под X11 и в окружениях, которые
-    сопоставляют окно с ярлыком по ``WM_CLASS``, имя процесса и есть
-    ``WM_CLASS``. По умолчанию GTK берёт его из имени запущенного файла, и у
-    установленного пакета это ``run.py``: с ``StartupWMClass`` в ярлыке такое
-    имя не совпадает, окно остаётся без значка приложения. Здесь процесс
-    называется идентификатором приложения — тем же, что в ярлыке и в
-    ``.desktop``.
+    Под Wayland оболочка берёт идентификатор окна (``_GTK_APPLICATION_ID``) и
+    находит ``.desktop`` — там нужен обратный домен, и он задаётся через
+    ``application_id``.
 
-    Вызывать до создания окон: ``WM_CLASS`` выставляется при их показе.
+    Под X11 сопоставление идёт по ``WM_CLASS``, а это пара (instance, class):
+    короткие имена латиницей, без домена и точек. Обратный домен в ``WM_CLASS``
+    — чужое для X11 соглашение: часть панелей и доков такой класс не сопоставляет
+    с ярлыком. Поэтому здесь:
+      * instance — ``silero-tts-reader``, имя программы;
+      * class     — ``SileroTtsReader``, то же, что ``StartupWMClass`` в ярлыке.
+
+    По умолчанию GTK берёт оба из имени запущенного файла, а у установленного
+    пакета это ``run.py``: с ярлыком такое имя не совпадает, и окно остаётся без
+    значка. Вызывать до создания окон — ``WM_CLASS`` выставляется при показе.
     """
     with contextlib.suppress(Exception):
-        GLib.set_prgname(APP_ID)
+        GLib.set_prgname(WM_INSTANCE)
+    # В GDK4 нет Gdk.set_program_class: класс окна задаётся только через
+    # X11-дисплей. Под Wayland вызова нет — там класс не используется.
+    with contextlib.suppress(Exception):
+        gi.require_version("GdkX11", "4.0")
+        from gi.repository import GdkX11
+        display = Gdk.Display.get_default()
+        if isinstance(display, GdkX11.X11Display):
+            GdkX11.X11Display.set_program_class(display, WM_CLASS)
 
 
 def apply_icon(window: Gtk.Window, title: str | None = None) -> None:

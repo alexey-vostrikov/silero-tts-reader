@@ -47,10 +47,17 @@ def test_contract_with_desktop() -> None:
     print("\n1. Согласие с .desktop-файлом")
     check(window_icon.APP_ID == "ru.skala.silero-tts-reader",
           f"app-id в коде: {window_icon.APP_ID}")
-    check(desktop_value("StartupWMClass") == window_icon.APP_ID,
-          "StartupWMClass совпадает с app-id")
+    # StartupWMClass — это класс окна из WM_CLASS, а не app-id: под X11
+    # сопоставление идёт по короткому имени латиницей, без домена.
+    check(desktop_value("StartupWMClass") == window_icon.WM_CLASS,
+          f"StartupWMClass = {desktop_value('StartupWMClass')}, "
+          f"класс окна = {window_icon.WM_CLASS}")
+    check("." not in window_icon.WM_CLASS,
+          f"в классе окна нет домена и точек: {window_icon.WM_CLASS}")
     check(desktop_value("Icon") == window_icon.ICON_NAME,
           f"Icon совпадает с именем иконки: {window_icon.ICON_NAME}")
+    check(desktop_value("StartupWMClass") != window_icon.APP_ID,
+          "класс окна отличается от app-id: это разные механизмы X11 и Wayland")
 
 
 def test_packaging_name() -> None:
@@ -124,13 +131,13 @@ def test_apply_icon() -> None:
 
 
 def test_wm_class() -> None:
-    """Имя процесса — то, по которому оконная система ищет значок окна."""
-    print("\n5. Имя процесса для оконной системы")
+    """WM_CLASS окна — короткая пара X11, совпадающая с ярлыком."""
+    print("\n5. Класс окна для оконной системы")
     from gi.repository import GLib
 
     window_icon.set_program_name()
-    check(GLib.get_prgname() == window_icon.APP_ID,
-          f"имя процесса совпадает с app-id: {GLib.get_prgname()}")
+    check(GLib.get_prgname() == window_icon.WM_INSTANCE,
+          f"имя программы: {GLib.get_prgname()}")
 
     # Настоящее окно: WM_CLASS — то, что видит оконная система. Без панели
     # проверка пропускается, но не молча: строка ниже объясняет причину.
@@ -173,9 +180,17 @@ def test_wm_class() -> None:
         if prop is None:                      # для проверяющего типов: ниже проверка
             raise AssertionError("WM_CLASS отсутствует")
         check(True, "WM_CLASS выставлен")
-        names = [part for part in prop.value.split(b"\0") if part]
-        check(names[0].decode() == window_icon.APP_ID,
-              f"WM_CLASS совпадает с app-id: {names[0].decode()}")
+        names = [part.decode() for part in prop.value.split(b"\0") if part]
+        check(len(names) >= 2, f"в WM_CLASS два поля: {names}")
+        # Первое поле — instance, второе — class. Ярлык сверяется с классом.
+        check(names[0] == window_icon.WM_INSTANCE,
+              f"instance = {names[0]}")
+        check(names[1] == window_icon.WM_CLASS,
+              f"class = {names[1]}")
+        check(window_icon.WM_CLASS in names,
+              "класс окна совпадает с StartupWMClass ярлыка")
+        check("." not in names[1],
+              f"в классе окна нет домена: {names[1]}")
     finally:
         window.destroy()
 
